@@ -74,6 +74,47 @@ public sealed class MinionUtilityTests
         Assert.Empty(f.Conn.Summons.Offerings);Assert.Empty(fighter.UtilityBuffs);
         Assert.Equal(0,fighter.Monster.Mods.Effects["monster_base_block_%"]);
         Assert.Contains(f.Conn.Minions.OutputQueue,o=>o.Log=="Offering expired");
+
+        void Set(string key, int value) => f.Conn.PlayerStats[Program.Stats.Key(key)!.Value] = value;
+        int Stat(string key) => Game.CharacterPlayerStats(f.Conn).GetValueOrDefault(Program.Stats.Key(key)!.Value);
+        Set("offerings_also_buff_you", 1); Set("self_offering_effect_+%", -50);
+        Set("offering_spells_effect_+%", 20); Set("allow_multiple_offerings", 1);
+        f.Conn.Pools = Game.PoolsFor(f.Conn, 100);
+        int attackBefore = f.Conn.Pools.AttackSpeedPct, spellBlockBefore = f.Conn.Pools.SpellBlockChance;
+        foreach (var (name, effect, at) in new[] { ("Flesh Offering", "FleshOffering", 20),
+            ("Spirit Offering", "SpiritOffering", 21), ("Bone Offering", "BoneOffering", 22) })
+        {
+            source = f.Equip((name, 20)).Single(); gem = Game.SupportedSkill(f.Conn, source); Corpses(1);
+            Assert.True(Game.StartOfferingLocked(f.Conn, source, gem, effect, (100,100), 0, at));
+        }
+        Assert.Equal(3, f.Conn.Summons.PlayerOfferingBuffs.Count);
+        Assert.Equal(attackBefore + 21, f.Conn.Pools.AttackSpeedPct); // 30 * (1 + .2 - .5), not 36 * .5.
+        Assert.Equal(21, Stat("cast_speed_+%"));
+        Assert.Equal(103, Stat("critical_strike_chance_+%"));
+        Assert.Equal(27, f.Conn.Summons.PlayerOfferingStats[Program.Stats.Key("base_critical_strike_multiplier_+")!.Value]);
+        Assert.Equal(24, f.Conn.Pools.BlockChance); Assert.Equal(spellBlockBefore + 23, f.Conn.Pools.SpellBlockChance);
+        Assert.False(f.Conn.Summons.PlayerOfferingStats.ContainsKey(Program.Stats.Key("life_regeneration_rate_per_minute_%")!.Value));
+        f.Conn.RecentEvents.Record(StatConditions.Blocked, 22);
+        Game.MinionUtilityTick(f.Conn, 22.1);
+        Assert.Equal(168, Stat("life_regeneration_rate_per_minute_%"));
+        Set("allow_multiple_offerings", 0); Set("allow_2_offerings", 1);
+        Game.MinionUtilityTick(f.Conn, 22.2);
+        Assert.Equal(2, f.Conn.Summons.Offerings.Count);
+        Assert.Equal(attackBefore, f.Conn.Pools.AttackSpeedPct);
+        Set("allow_2_offerings", 0); Game.MinionUtilityTick(f.Conn, 22.3);
+        Assert.Equal("BoneOffering", Assert.Single(f.Conn.Summons.Offerings).Effect);
+        Assert.Equal(0, Stat("critical_strike_chance_+%"));
+        Game.MinionUtilityTick(f.Conn, 26);
+        Assert.Equal(0, Stat("life_regeneration_rate_per_minute_%"));
+        Set("offerings_also_buff_you", 0); Game.MinionUtilityTick(f.Conn, 26.1);
+        Assert.Empty(f.Conn.Summons.PlayerOfferingStats); Assert.Empty(f.Conn.Summons.PlayerOfferingBuffs);
+        Assert.Equal(0, f.Conn.Pools.BlockChance); Assert.Single(f.Conn.Summons.Offerings);
+        Set("offerings_also_buff_you", 1); Game.MinionUtilityTick(f.Conn, 26.2);
+        Assert.Equal(24, f.Conn.Pools.BlockChance);
+        f.Conn.PlayerLife = 0; Game.MinionUtilityTick(f.Conn, 26.3);
+        Assert.Empty(f.Conn.Summons.Offerings); Assert.Empty(f.Conn.Summons.PlayerOfferingBuffs);
+        Assert.Empty(f.Conn.Summons.PlayerOfferingStats); Assert.Equal(0, f.Conn.Pools.BlockChance);
+
     }
     internal sealed class Fixture : IDisposable
     {
