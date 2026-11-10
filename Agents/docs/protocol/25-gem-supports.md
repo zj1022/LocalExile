@@ -154,8 +154,9 @@ shock/chill apply in the per-target support hook. Fist of War makes every 1.8 s 
 Devour recovers its life/mana on a killing blow (the corpse is not removed); Sacrifice pays current life once at
 the original player cast's first valid release (including Fireball/Spark), shared by repeats and cascades.
 Its added chaos enters raw spell damage before effectiveness, conversion, increases, more and damage prohibitions;
-unreleased cancelled, removed-source or retired casts pay nothing. Proxy/trigger executors must supply their own
-actual caster and never reuse the player payment; Spellblade adds its share of the one-hand melee weapon as spell damage; Hallow's Hallowing Flame gives
+unreleased cancelled, replaced-source or retired casts pay nothing. Payment publishes current life/reservation;
+area poison uses the same added chaos base. Source identity survives gem experience/level-lock edits, not replacement.
+Proxy/trigger executors must supply their own actual caster and never reuse the player payment; Spellblade adds its share of the one-hand melee weapon as spell damage; Hallow's Hallowing Flame gives
 the next attack 25% of its physical damage as extra fire (scaled by the magnitude stat, then removed); and Excommunicate
 suppresses an excommunicated monster's chaos damage for its 3 seconds.
 

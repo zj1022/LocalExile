@@ -1,4 +1,7 @@
 using GameServer.Core.Protocol.Instance;
+using System.Net;
+using System.Net.Sockets;
+using GameServer.Core.Protocol.Login;
 using GameServer.Core.Projectiles;
 using GameServer.Core.World;
 using GameServer.Modding;
@@ -11,17 +14,30 @@ public class SacrificeSupportTests
     [Fact]
     public async Task Projectile_cast_sacrifices_once_at_release_and_added_chaos_uses_common_damage_rules()
     {
-        using var fixture = new Fixture();
         foreach (string spell in new[] { "Fireball", "Spark" })
         {
+            using var fixture = new Fixture();
             fixture.Equip(spell, echo: true);
             var conn = fixture.Conn;
             var gem = Game.GemSkillEffects(conn).First(g => g.Gem != 0 && (spell == "Reap" || Game.SkillsFor(conn).EffectId(g.Effect) == spell));
             var session = fixture.Session;
-            await Game.LaunchProjectile("sacrifice", null!, null!, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
+            await Game.LaunchProjectile("sacrifice", fixture.Stream, fixture.Ciphers, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
             Assert.Equal(1000u, conn.PlayerLife);
+            _ = Game.CommitGemExperience(conn, 1);
+            Game.ItemsOf(conn).Add(PlayerInventories.BodyArmour, 0, 0,
+                ItemCatalog.Create(Program.Items.Find("Plate Vest")!));
             session.AdvanceTo(ProjectileRuntime.Time(.6));
             Assert.Equal(800u, conn.PlayerLife);
+            var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            session.Enqueue(() => { drained.SetResult(); return Task.CompletedTask; });
+            Assert.Same(drained.Task, await Task.WhenAny(drained.Task, session.OutputCompleted));
+            await drained.Task;
+            Assert.True(fixture.Reader.Available > 0, "Sacrifice must publish current life without waiting for recovery");
+            var expectedLife = InstanceProtocol.LifeUpdate(Program.PlayerId, 800, conn.PlayerReservedLife);
+            byte[] published = new byte[expectedLife.Length];
+            await fixture.Reader.GetStream().ReadExactlyAsync(published);
+            fixture.Decrypt.Receive.Process(published);
+            Assert.Equal(expectedLife, published);
             var hit = Assert.IsType<ProjectileOffense>(session.Runtime.Projectiles.First().Use.Payload).Hit;
             Assert.True(hit[DamageType.Chaos].Min > 0);
             session.AdvanceTo(ProjectileRuntime.Time(1.5));
@@ -30,13 +46,13 @@ public class SacrificeSupportTests
             // A separate original cast pays again, with live life, and shares increased/more and prohibitions.
             fixture.ResetSession();
             conn.PlayerStats[Program.Stats.Key("chaos_damage_+%")!.Value] = 200;
-            await Game.LaunchProjectile("sacrifice", null!, null!, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
+            await Game.LaunchProjectile("sacrifice", fixture.Stream, fixture.Ciphers, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
             fixture.Session.AdvanceTo(ProjectileRuntime.Time(.6));
             var increased = Assert.IsType<ProjectileOffense>(fixture.Session.Runtime.Projectiles.First().Use.Payload).Hit;
             Assert.Equal(hit[DamageType.Chaos].Min * 3, increased[DamageType.Chaos].Min, 6);
             fixture.ResetSession();
             conn.PlayerStats[Program.Stats.Key("base_deal_no_chaos_damage")!.Value] = 1;
-            await Game.LaunchProjectile("sacrifice", null!, null!, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
+            await Game.LaunchProjectile("sacrifice", fixture.Stream, fixture.Ciphers, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
             fixture.Session.AdvanceTo(ProjectileRuntime.Time(.6));
             Assert.Equal(0, Assert.IsType<ProjectileOffense>(fixture.Session.Runtime.Projectiles.First().Use.Payload).Hit[DamageType.Chaos].Min);
             conn.PlayerStats[StatKeys.SpellSkillsDealNoDamage] = 1;
@@ -60,12 +76,31 @@ public class SacrificeSupportTests
             Assert.Empty(fixture.Session.Runtime.Projectiles);
             if (spell == "Reap") continue;
             fixture.ResetSession();
+            await Game.LaunchProjectile("replacement", null!, null!, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
+            Game.ItemsOf(conn).Change(PlayerInventories.Weapon1, fixture.Host, host => host with
+            {
+                Sockets = host.Sockets.Select((socket, index) => index == 0 ? socket with
+                { Gem = ItemCatalog.Create(Program.Items.Find("Metadata/Items/Gems/SkillGem" + spell)!) } : socket).ToArray()
+            });
+            fixture.Session.AdvanceTo(ProjectileRuntime.Time(2));
+            Assert.Equal(1000u, conn.PlayerLife);
+            Assert.Empty(fixture.Session.Runtime.Projectiles);
+            fixture.ResetSession();
             await Game.LaunchProjectile("removed", null!, null!, conn, gem.Id, (100,100), (120,100), conn.ActionInterruptionGeneration);
             Game.ItemsOf(conn).Remove(PlayerInventories.Weapon1, fixture.Host);
             fixture.Session.AdvanceTo(ProjectileRuntime.Time(2));
             Assert.Equal(1000u, conn.PlayerLife);
             Assert.Empty(fixture.Session.Runtime.Projectiles);
         }
+        fixture.Equip("Reap");
+        var player = fixture.Conn;
+        player.PlayerLife = 100000;
+        player.PlayerStats[Program.Stats.Key("base_chance_to_poison_on_hit_%")!.Value] = 100;
+        var reap = Game.GemSkillEffects(player).First(g => g.Gem != 0);
+        var victim = new SpawnedMonster("sacrifice poison", new(120,100,0), 0,0,1000000) { Hostile = true };
+        player.Monsters[123] = victim;
+        await Game.AreaSkillHit("poison", fixture.Stream, fixture.Ciphers, player, reap.Id, reap, (100,100),(120,100), immediate: true);
+        Assert.True(victim.Poisons.TotalDps(victim.Poisons.Until - .5) > 1000, "Sacrificed life must reach area poison base damage");
     }
 
     sealed class Fixture : IDisposable
@@ -77,8 +112,18 @@ public class SacrificeSupportTests
         public ClientState Conn { get; }
         public Game.ProjectileSession Session { get; private set; } = null!;
         public uint Host;
+        readonly TcpListener listener = new(IPAddress.Loopback, 0);
+        readonly TcpClient writer = new();
+        public TcpClient Reader { get; }
+        public NetworkStream Stream => writer.GetStream();
+        public ConnectionCiphers Ciphers { get; } = new(new byte[64], false);
+        public ConnectionCiphers Decrypt { get; } = new(new byte[64], true);
         public Fixture()
         {
+            listener.Start();
+            var accepting = listener.AcceptTcpClientAsync();
+            writer.Connect(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+            Reader = accepting.GetAwaiter().GetResult();
             Saves.Open(path);
             Game.CombatLifetime = lifetime;
             Program.SetGameLogic(new GameServer.Modules.Game.GameLogic());
@@ -89,14 +134,14 @@ public class SacrificeSupportTests
                 Pools = new(100,1000,1000,int.MaxValue,0,Strength:1000,Dexterity:1000,Intelligence:1000),
                 LeagueModule = new(new League("test","Standard",false,false),new HashSet<string>(["Game"]))
             };
-            Conn.Clock.Stop();
+            Conn.Clock.Restart();
             ResetSession();
         }
         public void ResetSession()
         {
             Session?.Invalidate();
             Conn.PlayerLife = 1000;
-            Session = new("sacrifice",null!,null!,Conn);
+            Session = new("sacrifice",Stream,Ciphers,Conn);
             Conn.ProjectileRuntime = Session;
         }
         public void Equip(string spell, bool echo = false)
@@ -114,11 +159,7 @@ public class SacrificeSupportTests
         }
         public void Dispose()
         {
-            Session.Invalidate(); lifetime.Stop(ex => throw ex); Game.CombatLifetime = previousLifetime; PlayerInventories.Forget(Conn.Character!); Program.SetGameLogic(previous!); TestEnvironment.ReleaseSaves(path);
+            Session.Invalidate(); Reader.Dispose(); writer.Dispose(); listener.Stop(); lifetime.Stop(ex => throw ex); Game.CombatLifetime = previousLifetime; PlayerInventories.Forget(Conn.Character!); Program.SetGameLogic(previous!); TestEnvironment.ReleaseSaves(path);
         }
     }
 }
-
-
-
-

@@ -276,7 +276,7 @@ static partial class Game
         int variation = SkillArtVariation(conn, gem.Gem);
         profile = profile with { Id = Art.Projectile(profile.Id, variation) };
         var local = spell ? null : WeaponFor(conn).LocalSources;
-        int addedChaos = sacrifice?.AddedChaos() ?? 0;
+        int addedChaos = sacrifice?.AddedChaos(() => session.Packet(sacrifice.LifePacket)) ?? 0;
         var ailmentRows = SupportedAilmentRows(conn, skillId, spell ? "spell" : "main_hand", addedChaos: addedChaos);
         var shot = new ProjectileOffense(SupportedProjectileHit(conn, skillId, area: false, addedChaos: addedChaos), spell, PlayerAccuracy(conn, player),
             SupportedReleaseCriticalChance(conn, skillId), SupportedCriticalMultiplier(conn, skillId), gem.Name)

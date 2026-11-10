@@ -1413,6 +1413,7 @@ static partial class Game
             if (Replaced() || conn.Closed || !Current()) return;
         }
         int addedChaos;
+        bool sacrificedLife = false;
         List<(uint Id, SpawnedMonster M)> targets;
         int sweep;
         // Melee Splash victims and their damage multiplier (see MeleeSplash).
@@ -1428,7 +1429,7 @@ static partial class Game
         {
             double now = ProjectileWorldTime(conn);
             if (!Current() || !sacrifice.Current) return;
-            addedChaos = sacrifice.AddedChaos();
+            addedChaos = sacrifice.AddedChaos(() => sacrificedLife = true);
             // A freeze or stun that landed after this stage was paid interrupts it before the sweep.
             if (channelGeneration is not null
                 && PlayerActionBlocked(conn, conn.Clock.Elapsed.TotalSeconds, conn.Clock.Elapsed.TotalSeconds)) return;
@@ -1480,6 +1481,8 @@ static partial class Game
                     }
             }
         }
+        if (sacrificedLife)
+            await Send(remote, stream, ciphers, [], null, atGate: sacrifice.LifePacket);
         bool fortificationGranted = false; // One simultaneous sweep, independent of notification latency.
         bool rageGranted = false; // Only a positive gain takes this sweep's latch.
         // Reap's Blood Charges: the charges held scale this sweep's hits; the hits that land and the kills settle them.
@@ -1549,7 +1552,7 @@ static partial class Game
                     criticalImpale = ImpaleStats.From(player, Stats, !spell, skillStats, local, critical: true);
                     ignite = SupportedIgnite(conn, skillId, spell, player, shield);
                     bleed = SupportedBleed(conn, skillId, spell, player, shield, melee: SkillsFor(conn).IsMelee(gem.Effect));
-                    poison = SupportedPoison(conn, skillId, spell, player, shield);
+                    poison = SupportedPoison(conn, skillId, spell, player, shield, addedChaos);
                 }
                 var contactHit = sweepHit;
                 if (VaalExecutor(conn, gem.Effect))
