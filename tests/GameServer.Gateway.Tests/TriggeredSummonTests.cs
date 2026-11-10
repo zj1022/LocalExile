@@ -63,6 +63,16 @@ public sealed class TriggeredSummonTests
                 Assert.InRange(f.Conn.Summons.Fighters[restored].Monster.Life / (double)zombie.Monster.MaxLife, .49, .51);
             }
         }
+        using var linked = new Fixture();
+        ushort first = linked.Equip(("Desecrate",20), ("Flesh Offering",20), ("Cast when Damage Taken Support",20)).First();
+        var supported = Game.SupportedSkill(linked.Conn, first);
+        int damage = supported.Stats[Program.Stats.Key("cast_on_damage_taken_threshold")!.Value];
+        Game.RecordDamageTakenTriggers(linked.Conn, damage, 1000);
+        Game.ReleaseDamageTakenTriggers(linked.Conn, linked.Session);
+        await Drain(linked.Session);
+        Assert.Equal(5, linked.Conn.Monsters.Values.Count(m => m.CorpseConsumed));
+        Assert.Equal("FleshOffering", Assert.Single(linked.Conn.Summons.Offerings).Effect);
+        Assert.True(linked.Conn.RecentEvents.Happened(StatConditions.ConsumedCorpse, Game.AreaTime(linked.Conn)));
     }
 
     [Fact]
