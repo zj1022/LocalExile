@@ -21,7 +21,7 @@ sealed class PlayerInventories
     internal static object GemIdentity(Item gem) => GemIdentities.GetValue(gem, _ => new());
     internal static Item PreserveGemIdentity(Item before, Item after)
     {
-        if (!ReferenceEquals(before, after)) GemIdentities.Add(after, GemIdentity(before));
+        if (!ReferenceEquals(before, after)) GemIdentities.AddOrUpdate(after, GemIdentity(before));
         return after;
     }
 
