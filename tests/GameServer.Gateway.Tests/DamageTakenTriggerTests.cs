@@ -373,6 +373,19 @@ public class DamageTakenTriggerTests
                 Game.TickChannelTriggers(conn, session, 12.001); session.AdvanceTo(0);
                 Assert.Equal(3, session.Runtime.Projectiles.Count); Assert.Equal(paid, conn.PlayerMana);
                 Assert.Equal(action, conn.ActionCount);
+                // Exact pending #779 + CwC composition: pay life once and retain its chaos payload.
+                var host = Game.ItemsOf(conn).Items(PlayerInventories.BodyArmour).Single();
+                Game.ItemsOf(conn).Change(PlayerInventories.BodyArmour, host.Id, item => item with
+                { Sockets = [.. item.Sockets, new(SocketColour.White,
+                    ItemCatalog.Create(Program.Items.Find("Metadata/Items/Gems/SupportGemSacrifice")!))], Links = [5] });
+                conn.ChannelSkill = channel.Id; conn.ChannelGeneration = 2; conn.LastChannelUpdateAt = 10000;
+                conn.PaidChannel = new(channel.Id, channel.Effect, conn.ActionCount, 2, Game.CombatLifetime!);
+                conn.PlayerLife = 1000; conn.PlayerMana = 1000;
+                Game.BeginChannelTriggers(conn, session, channel.Id, action, 2, (20, 0), 20);
+                Game.TickChannelTriggers(conn, session, 20.401); session.AdvanceTo(0);
+                Assert.True(conn.PlayerLife < 1000);
+                Assert.Contains(session.Runtime.Projectiles,
+                    p => ((ProjectileOffense)p.Use.Payload!).Hit[GameServer.Core.World.DamageType.Chaos].Max > 0);
             }
             finally { session.Invalidate(); }
         });
