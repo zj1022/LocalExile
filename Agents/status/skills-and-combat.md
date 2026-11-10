@@ -1233,7 +1233,7 @@ This is a research baseline, not new live skill acceptance or complete native/se
   the hex lifecycle. Skitterbots apply scaled chill/shock and trigger placed traps/mines, rearming a mine once;
   full trap/mine skill-specific payloads, banner/Vaal executors and Agony's retail Virulence decay remain partial.
   ([11](../docs/protocol/11-skills.md) 13).
-- Convocation recalls following minions with temporary regeneration; Flesh/Bone/Spirit Offerings consume corpses and buff fighters.
+- Convocation recalls followers; Flesh/Bone/Spirit Offerings consume corpses and buff fighters.
   Partial: offering effects on the player and bespoke non-fighter companions.
   Summon/mine/trap input and cleanup work; special payloads remain partial ([11](../docs/protocol/11-skills.md) 10h).
 - Hexes/marks have limits and combat effects; reflection and special payloads remain partial (`MonsterCurses`).
