@@ -39,6 +39,7 @@ public sealed class MinionUtilityTests
     [Fact]
     public async Task Offerings_consume_at_most_five_corpses_replace_refresh_and_expire_their_combat_stats()
     {
+        await VerifyTriggeredUtilities();
         using var f=new Fixture();
         ushort source=f.Equip(("Summon Holy Relic",20)).Single();
         uint id=await Game.SummonFighter("test",f.Stream,f.Ciphers,f.Conn,source,Game.SummonData.Find("SummonHolyRelic")!,(100,100));
@@ -54,6 +55,7 @@ public sealed class MinionUtilityTests
         Corpses(6);
         Assert.True(Game.StartOfferingLocked(f.Conn,source,gem,"FleshOffering",(100,100),0,1));
         Assert.Equal(5,f.Conn.Monsters.Values.Count(m=>m.CorpseConsumed));
+        Assert.True(f.Conn.RecentEvents.Happened(StatConditions.ConsumedCorpse, 1));
         Assert.Equal(10,Assert.Single(f.Conn.Summons.Offerings).Until);
         Assert.Equal(30,fighter.Monster.Mods.Effects["attack_speed_+%"]);
         Assert.Equal(30,fighter.Monster.Mods.Effects["cast_speed_+%"]);
@@ -115,6 +117,39 @@ public sealed class MinionUtilityTests
         Assert.Empty(f.Conn.Summons.Offerings); Assert.Empty(f.Conn.Summons.PlayerOfferingBuffs);
         Assert.Empty(f.Conn.Summons.PlayerOfferingStats); Assert.Equal(0, f.Conn.Pools.BlockChance);
 
+    }
+    static async Task VerifyTriggeredUtilities()
+    {
+        foreach (string name in new[] { "Convocation", "Flesh Offering", "Bone Offering", "Spirit Offering" })
+        {
+            using var f = new Fixture();
+            ushort relicSource = f.Equip(("Summon Holy Relic",20)).Single();
+            uint relic = await Game.SummonFighter("test", f.Stream, f.Ciphers, f.Conn, relicSource,
+                Game.SummonData.Find("SummonHolyRelic")!, (160,160));
+            ushort source = f.Equip((name,20), ("Cast when Damage Taken Support",20)).First();
+            uint host = Game.ItemsOf(f.Conn).Items(PlayerInventories.Weapon1).Single().Id;
+            Game.ItemsOf(f.Conn).Change(PlayerInventories.Weapon1, host, item => item with { Links = [2] });
+            f.Conn.PlayerStats[Program.Stats.Key("offering_skills_do_not_require_corpses")!.Value] = 1;
+            var gem = Game.SupportedSkill(f.Conn, source);
+            Assert.True(Game.TriggerPayloadAvailable(f.Conn, gem));
+            int threshold = gem.Stats[Program.Stats.Key("cast_on_damage_taken_threshold")!.Value];
+            uint mana = f.Conn.PlayerMana;
+            uint cost = (uint)Game.SupportedStats(f.Conn, source)[Program.Stats.Key("mana_cost")!.Value];
+            int action = f.Conn.ActionCount;
+            var session = new Game.ProjectileSession("utility-trigger", f.Stream, f.Ciphers, f.Conn);
+            try
+            {
+                Game.RecordDamageTakenTriggers(f.Conn, threshold, 1000);
+                Game.ReleaseDamageTakenTriggers(f.Conn, session);
+                var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                session.Enqueue(() => { done.SetResult(); return Task.CompletedTask; });
+                await done.Task;
+                Assert.Equal(mana - cost, f.Conn.PlayerMana); Assert.Equal(action, f.Conn.ActionCount);
+                if (name == "Convocation") Assert.True(f.Conn.Summons.Fighters[relic].RecallUntil > 0);
+                else Assert.Equal(source, Assert.Single(f.Conn.Summons.Offerings).Source);
+            }
+            finally { session.Invalidate(); await session.OutputCompleted; }
+        }
     }
     internal sealed class Fixture : IDisposable
     {

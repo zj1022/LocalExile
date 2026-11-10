@@ -76,6 +76,7 @@ static partial class Game
         foreach (var (id, corpse) in corpses)
         {
             corpse.CorpseConsumed = true;
+            conn.RecentEvents.Record(StatConditions.ConsumedCorpse, now);
             conn.Minions.OutputQueue.Add(new(InstanceProtocol.RemoveObject(id), "Offering corpse consumed"));
         }
         int extra = Math.Max(0, corpses.Length - 1);
