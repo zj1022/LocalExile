@@ -260,7 +260,9 @@ static partial class Game
         var release = spell ? null : Animations.AttackContactPoint(
             Environment.GetEnvironmentVariable("Game_PLAYER_AO") ?? SkillsFor(conn).ClassFor(conn.ClassRow).AnimatedObject,
             WeaponProfileFor(conn, activeSet: true));
-        double ahead = release is { ForwardCells: > 0 } point ? point.ForwardCells : 1.5;
+        // LightningSlash is released three cells ahead at ground level, not at the sword's contact point
+        // (3.29.3c Positioned trace: player (391,352), every bolt starts (388,352) aimed left).
+        double ahead = IsLightningStrike(gem.Effect) ? 3 : release is { ForwardCells: > 0 } point ? point.ForwardCells : 1.5;
         // A point closer than the muzzle must not end up behind the released projectile.
         if (totem is null) origin += direction * Math.Min(ahead, (target - origin).Length / 2);
         profile = profile with { Range = PrimaryRange(SkillsFor(conn).EffectId(gem.Effect), profile.Range,
@@ -278,8 +280,8 @@ static partial class Game
         profile = profile with { Id = Art.Projectile(profile.Id, variation) };
         var local = spell ? null : WeaponFor(conn).LocalSources;
         int addedChaos = sacrifice?.AddedChaos(() => session.Packet(sacrifice.LifePacket)) ?? 0;
-        var hitInputs = SupportedHitInputsFor(conn, skillId, area: false, totem: totem is not null, addedChaos: addedChaos)!;
-        var areaInputs = SupportedHitInputsFor(conn, skillId, area: true, totem: totem is not null, addedChaos: addedChaos)!;
+        var hitInputs = SupportedHitInputsFor(conn, skillId, area: false, totem: totem is not null, addedChaos: addedChaos, projectile: true)!;
+        var areaInputs = SupportedHitInputsFor(conn, skillId, area: true, totem: totem is not null, addedChaos: addedChaos, projectile: true)!;
         var ailmentRows = SupportedAilmentRowsFrom(hitInputs, spell ? "spell" : "main_hand");
         var shot = new ProjectileOffense(SupportedHitFrom(hitInputs, suppress: false), spell, PlayerAccuracy(conn, player),
             SupportedReleaseCriticalChance(conn, skillId), SupportedCriticalMultiplier(conn, skillId), gem.Name)
@@ -316,7 +318,7 @@ static partial class Game
             // Spectral Throw's action draws its own weapon too (Frida 2026-11-02): a server object was a second one.
             // Arrow Nova's volley is drawn by the client (the 18 SplitArrowDefault children were client objects), but
             // its payload arrow is not, so the server still sends that one object.
-            ClientPredicted = totem is not null || spell || SkillsFor(conn).EffectId(gem.Effect) == "SpectralThrow",
+            ClientPredicted = totem is not null || spell || SkillsFor(conn).EffectId(gem.Effect) == "SpectralThrow" || IsLightningStrike(gem.Effect),
             // Only where the skill's recipe draws nothing of its own (PresentationFor prefers this one).
             Presentation = rain
                 // Arrow Nova's payload is the support's rain rig: the official server sends no payload object, only
