@@ -44,12 +44,12 @@ static partial class Game
     }
 
     internal static Task<bool> CastGolem(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
-        ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, int recovery, Func<bool> current) =>
+        ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, int recovery, Func<bool> current, bool triggered = false) =>
         RepeatSummonCast(conn, source, recovery, current, async () =>
         {
             await SummonGolem(remote, stream, ciphers, conn, source, definition, aim, current: current);
             return true;
-        });
+        }, triggered);
 
     internal static async Task<uint> SummonGolem(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
         ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, double life = 1, bool arrival = false, Func<bool>? current = null)

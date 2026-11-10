@@ -1,12 +1,12 @@
 static partial class Game
 {
     static async Task<bool> RepeatSummonCast(ClientState conn, ushort source, int recovery,
-        Func<bool> current, Func<Task<bool>> release)
+        Func<bool> current, Func<Task<bool>> release, bool triggered = false)
     {
         var gem = SupportedSkill(conn, source);
-        int repeats = SpellRepeats(conn, source, gem.Effect);
+        int repeats = triggered ? 0 : SpellRepeats(conn, source, gem.Effect);
         double interval = Math.Max(.001, (CastMs(conn, gem.Effect, source) ?? 1000) / 1000d);
-        double due = AreaTime(conn) + interval;
+        double due = AreaTime(conn) + (triggered ? 0 : interval);
         var lifetime = CombatLifetime;
         for (int repeat = 0; repeat <= repeats; repeat++, due += interval)
         {
