@@ -1235,7 +1235,6 @@ This is a research baseline, not new live skill acceptance or complete native/se
   full trap/mine skill-specific payloads, banner/Vaal executors and Agony's retail Virulence decay remain partial.
   ([11](../docs/protocol/11-skills.md) 13).
 - Animated equipment admission respects melee/ranged variants, identification, item level and six-socket weapon exclusion.
-- Persistent summons restore their gem source; spell repeats execute summon groups and stop on interruption.
 - Convocation and Offerings execute manually or through linked triggers; bespoke companions remain partial.
 - Persistent summons and golems restore their gem source and replace only the affected fighter on rescaling;
   spell repeats execute summon groups and stop on interruption.
