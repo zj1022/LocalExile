@@ -32,7 +32,8 @@ static partial class Game
             if (legacyRemaining == 0 && plan.Group != 36)
             {
                 var debt = conn.SingleUseCooldowns.Where(e => conn.CooldownGroups.GetValueOrDefault(e.Key, 36) == plan.Group)
-                    .Select(e => e.Value).OrderByDescending(s => s.SpentUses).FirstOrDefault();
+                    .Select(e => e.Value).Select(s => { s.Refresh(now, s.Rate); return s; })
+                    .Where(s => !s.FullyRecovered).OrderByDescending(s => s.SpentUses).FirstOrDefault();
                 if (debt is not null) state.InheritDebt(debt, now, plan);
             }
             conn.SingleUseCooldowns[effect] = state;
@@ -97,7 +98,7 @@ static partial class Game
                 state = CooldownStateLocked(conn, effect, cooldown, now);
                 var peers = cooldown.Group == 36 ? [] : GemSkillEffects(conn).Where(g => g.Effect != effect)
                     .GroupBy(g => g.Effect).Select(g => g.First())
-                    .Select(g => (Gem: g, Plan: CooldownForSkill(conn, g.Id)))
+                    .Select(g => (Gem: g, Plan: CooldownFor(conn, g.Effect, g.Level, g.Quality)))
                     .Where(p => p.Plan is { } peer && peer.Group == cooldown.Group)
                     .Select(p => (p.Gem, Plan: p.Plan!.Value,
                         State: CooldownStateLocked(conn, p.Gem.Effect, p.Plan.Value, now))).ToArray();
