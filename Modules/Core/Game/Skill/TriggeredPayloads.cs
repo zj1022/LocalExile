@@ -28,7 +28,8 @@ static partial class Game
                 ? () => StartTriggeredGuard(conn, session, id, conn.Clock.Elapsed.TotalSeconds) : null;
         if (UsesProjectileRuntime(gem.Effect))
         {
-            var use = CaptureGemProjectile(conn, session, id, skill, aim, CaptureSkillCriticalRoll(conn, id));
+            var use = CaptureGemProjectile(conn, session, id, skill, aim, CaptureSkillCriticalRoll(conn, id),
+                sacrifice: new SacrificeUse(conn, id, skill.Effect, skill.Gem, triggered: true));
             use = ClientDrawnVolley(conn, session, id, skill, use, 0, 0);
             use = use with { Payload = ((ProjectileOffense)use.Payload!) with { ClientPredicted = false } };
             return () => session.Schedule(session.Runtime.Now, current, () => use);
