@@ -99,10 +99,11 @@ public static partial class Game
             : attack ? AttackReleaseDelay(AttackContactDelay(conn, SupportedAttackSeconds(conn, skillId), false))
             : cast.Value / 1000d * Animations.SpellRelease(SkillsFor(conn).ClassFor(conn.ClassRow).AnimatedObject);
         int epoch = conn.ProjectileEpoch;
+        var sacrifice = new SacrificeUse(conn, skillId, gem.Effect, gem.Gem);
         // Paid attacks survive Move unless their recipe opts into cancellable windup (e.g. release-time costs).
         // Spells and cooldown tickets retain action cancellation.
         // Epoch, death and hit recovery still cancel unreleased attacks.
-        bool Valid() => conn.ProjectileActive(epoch) && conn.ActionInterruptionGeneration == recoveryGeneration
+        bool Valid() => sacrifice.Current && conn.ProjectileActive(epoch) && conn.ActionInterruptionGeneration == recoveryGeneration
             && (ticket?.Current(conn) ?? (cancelOnNewAction
             ? PlayerActionCurrent(conn, action)
             : conn.PlayerLife > 0 && conn.ElementalAilments.ActionFactor(conn.Clock.Elapsed.TotalSeconds) > 0 && !conn.HitRecovery.Active(conn.Clock.Elapsed.TotalSeconds)))
@@ -116,7 +117,7 @@ public static partial class Game
             int left = repeats - repeat;
             session.Schedule(ProjectileRuntime.Time(acceptedAt + repeat * cast.Value / 1000d + delay), Valid,
                 () => ClientDrawnVolley(conn, session, skillId, gem,
-                    CaptureGemProjectile(conn, session, skillId, gem, aim, criticalRoll, sequence, (uint)left, delay),
+                    CaptureGemProjectile(conn, session, skillId, gem, aim, criticalRoll, sequence, (uint)left, delay, sacrifice: sacrifice),
                     sequence, (uint)left));
         }
         return Task.CompletedTask;
@@ -223,7 +224,7 @@ public static partial class Game
 
     public static ProjectileUse CaptureGemProjectile(ClientState conn, ProjectileSession session, ushort skillId,
         (ushort Id, int Effect, string Name, int Level, int Quality, uint Gem) gem, (int X, int Y) aim,
-        SkillCriticalRoll criticalRoll, ushort sequence = 0, uint repeatsLeft = 0, double releaseDelay = 0, TotemState.Totem? totem = null)
+        SkillCriticalRoll criticalRoll, ushort sequence = 0, uint repeatsLeft = 0, double releaseDelay = 0, TotemState.Totem? totem = null, SacrificeUse? sacrifice = null)
     {
         // A delayed release reads current combat state once, independently of the input handler's earlier snapshot.
         // Its damage, crit, ailments and secondary stages resolve the same supported gem rather than repeating the
@@ -278,8 +279,9 @@ public static partial class Game
         int variation = SkillArtVariation(conn, gem.Gem);
         profile = profile with { Id = Art.Projectile(profile.Id, variation) };
         var local = spell ? null : WeaponFor(conn).LocalSources;
-        var hitInputs = SupportedHitInputsFor(conn, skillId, area: false, projectile: true, totem: totem is not null)!;
-        var areaInputs = SupportedHitInputsFor(conn, skillId, area: true, projectile: true, totem: totem is not null)!;
+        int addedChaos = sacrifice?.AddedChaos(() => session.Packet(sacrifice.LifePacket)) ?? 0;
+        var hitInputs = SupportedHitInputsFor(conn, skillId, area: false, projectile: true, totem: totem is not null, addedChaos: addedChaos)!;
+        var areaInputs = SupportedHitInputsFor(conn, skillId, area: true, projectile: true, totem: totem is not null, addedChaos: addedChaos)!;
         var ailmentRows = SupportedAilmentRowsFrom(hitInputs, spell ? "spell" : "main_hand");
         var shot = new ProjectileOffense(SupportedHitFrom(hitInputs, suppress: false), spell, PlayerAccuracy(conn, player),
             SupportedReleaseCriticalChance(conn, skillId), SupportedCriticalMultiplier(conn, skillId), gem.Name)
