@@ -1235,8 +1235,6 @@ This is a research baseline, not new live skill acceptance or complete native/se
   ([11](../docs/protocol/11-skills.md) 13).
 - Animated equipment admission respects melee/ranged variants, identification, item level and six-socket weapon exclusion.
 - Persistent summons restore their gem source; spell repeats execute summon groups and stop on interruption.
-- Convocation recalls followers; Flesh/Bone/Spirit Offerings consume corpses and buff fighters.
-  Partial: offering effects on the player and bespoke non-fighter companions.
 - Convocation recalls followers; Offerings buff fighters and qualified owners; bespoke companions remain partial.
   Summon/mine/trap input and cleanup work; special payloads remain partial ([11](../docs/protocol/11-skills.md) 10h).
 - Hexes/marks have limits and combat effects; reflection and special payloads remain partial (`MonsterCurses`).
