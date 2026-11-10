@@ -117,7 +117,7 @@ static partial class Game
             int left = repeats - repeat;
             session.Schedule(ProjectileRuntime.Time(acceptedAt + repeat * cast.Value / 1000d + delay), Valid,
                 () => ClientDrawnVolley(conn, session, skillId, gem,
-                    CaptureGemProjectile(conn, session, skillId, gem, aim, criticalRoll, sequence, (uint)left, delay, sacrifice),
+                    CaptureGemProjectile(conn, session, skillId, gem, aim, criticalRoll, sequence, (uint)left, delay, sacrifice: sacrifice),
                     sequence, (uint)left));
         }
         return Task.CompletedTask;
