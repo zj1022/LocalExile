@@ -52,8 +52,12 @@ sealed class SummonedMinions
     public readonly Dictionary<uint, double> Until = [];
     public readonly Dictionary<uint, SummonCatalog.Definition> Definitions = [];
     public readonly Dictionary<uint, GameServer.Core.Protocol.Instance.Item> Weapons = [];
-    internal sealed record Offering(string Effect, double Until, ushort Buff, ushort Source, Dictionary<string, int> Stats);
+    internal sealed record Offering(string Effect, double Until, ushort Buff, ushort Source,
+        Dictionary<string, int> Stats, Dictionary<string, int> BaseStats, int EffectIncrease);
     public readonly List<Offering> Offerings = [];
+    public Dictionary<uint, int> PlayerOfferingStats = [];
+    public readonly Dictionary<ushort, (Offering Offering, ushort Instance)> PlayerOfferingBuffs = [];
+    public long OfferingRevision;
     public double RefreshAt;
     public bool Restored;
     public double HolyRegenerationUntil;

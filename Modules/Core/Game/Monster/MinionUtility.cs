@@ -84,10 +84,15 @@ static partial class Game
                 + extra * GolemStat(gem.Stats, "offering_skill_effect_duration_per_corpse"),
             n => GolemStat(player, n) + (n == "skill_effect_duration_+%" ? GolemStat(player, "offering_duration_+%")
                 + GolemStat(player, kind + "_offering_duration_+%") : 0), n => GolemStat(gem.Stats, n));
-        double scale = Math.Max(0, 1 + (GolemStat(player, "offering_spells_effect_+%")
-            + GolemStat(player, kind + "_offering_effect_+%") + GolemStat(gem.Stats, "offering_spells_effect_+%")) / 100d);
-        Dictionary<string, int> stats = [];
-        void Add(string to, string from, int bonus = 0) => stats[to] = (int)Math.Floor((GolemStat(gem.Stats, from) + bonus) * scale);
+        int increase = GolemStat(player, "offering_spells_effect_+%")
+            + GolemStat(player, kind + "_offering_effect_+%") + GolemStat(gem.Stats, "offering_spells_effect_+%");
+        double scale = Math.Max(0, 1 + increase / 100d);
+        Dictionary<string, int> stats = [], baseStats = [];
+        void Add(string to, string from, int bonus = 0)
+        {
+            baseStats[to] = GolemStat(gem.Stats, from) + bonus;
+            stats[to] = ActorScale.Saturate((long)Math.Floor(baseStats[to] * scale));
+        }
         ushort buff;
         if (effect == "FleshOffering")
         {
@@ -115,7 +120,7 @@ static partial class Game
         all.RemoveAll(o => o.Effect == effect || now >= o.Until);
         int limit = GolemStat(player, "allow_multiple_offerings") != 0 ? 3 : GolemStat(player, "allow_2_offerings") != 0 ? 2 : 1;
         while (all.Count >= limit) all.RemoveAt(0);
-        all.Add(new(effect, now + duration, buff, source, stats));
+        all.Add(new(effect, now + duration, buff, source, stats, baseStats, increase));
         MinionUtilityTick(conn, now);
         return true;
     }
@@ -125,6 +130,10 @@ static partial class Game
         if (!CurrentGameWork || conn.Closed || conn.LeavingArea || conn.Paused) return;
         if (conn.PlayerLife == 0) conn.Summons.Offerings.Clear();
         conn.Summons.Offerings.RemoveAll(o => now >= o.Until);
+        var player = CharacterPlayerStats(conn);
+        int limit = GolemStat(player, "allow_multiple_offerings") != 0 ? 3 : GolemStat(player, "allow_2_offerings") != 0 ? 2 : 1;
+        while (conn.Summons.Offerings.Count > limit) conn.Summons.Offerings.RemoveAt(0);
+        SelfOfferingTick(conn, player, now);
         foreach (var fighter in UtilityFighters(conn))
         {
             var active = conn.Summons.Offerings;
@@ -142,7 +151,57 @@ static partial class Game
             foreach (var offering in active) foreach (var (key, value) in offering.Stats) stats[key] = stats.GetValueOrDefault(key) + value;
             if (fighter.Utility.Count == stats.Count && stats.All(p => fighter.Utility.GetValueOrDefault(p.Key) == p.Value)) continue;
             fighter.Utility = stats; fighter.InputHash = 0;
-            RefreshGolemLocked(conn, fighter, CharacterPlayerStats(conn));
+            RefreshGolemLocked(conn, fighter, player);
         }
+    }
+
+    static void AddSelfOfferingStats(ClientState conn, Dictionary<uint, int> stats)
+    {
+        lock (conn.Monsters)
+            if (conn.PlayerLife > 0)
+                foreach (var (key, value) in conn.Summons.PlayerOfferingStats)
+                    stats[key] = ActorScale.Saturate((long)stats.GetValueOrDefault(key) + value);
+    }
+
+    static void SelfOfferingTick(ClientState conn, IReadOnlyDictionary<uint, int> player, double now)
+    {
+        var state = conn.Summons;
+        var active = GolemStat(player, "offerings_also_buff_you") != 0 ? state.Offerings.ToArray() : [];
+        foreach (var (row, sent) in state.PlayerOfferingBuffs.ToArray())
+            if (!active.Any(o => ReferenceEquals(o, sent.Offering)))
+            {
+                conn.Minions.OutputQueue.Add(new(InstanceEntities.RemoveBuff(PlayerId, sent.Instance), "Self offering ended"));
+                state.PlayerOfferingBuffs.Remove(row);
+            }
+        foreach (var offering in active)
+            if (!state.PlayerOfferingBuffs.ContainsKey(offering.Buff))
+            {
+                ushort instance = conn.NextBuff++;
+                state.PlayerOfferingBuffs[offering.Buff] = (offering, instance);
+                conn.Minions.OutputQueue.Add(new(InstanceEntities.AddBuff(PlayerId, instance, offering.Buff, PlayerId, offering.Source,
+                    u68: BitConverter.SingleToUInt32Bits((float)(offering.Until - now))), "Self offering buff"));
+            }
+        Dictionary<uint, int> next = [];
+        foreach (var offering in active)
+        {
+            double scale = Math.Max(0, 1 + (offering.EffectIncrease + GolemStat(player, "self_offering_effect_+%")) / 100d);
+            foreach (var (name, value) in offering.BaseStats)
+            {
+                string stat = name;
+                if (stat == "life_regeneration_rate_per_minute_%_if_blocked_recently")
+                {
+                    if (!conn.RecentEvents.Happened(StatConditions.Blocked, now)) continue;
+                    stat = "life_regeneration_rate_per_minute_%";
+                }
+                GolemAdd(next, stat, ActorScale.Saturate((long)Math.Floor(value * scale)));
+            }
+        }
+        if (next.Count == state.PlayerOfferingStats.Count
+            && next.All(p => state.PlayerOfferingStats.GetValueOrDefault(p.Key) == p.Value)) return;
+        state.PlayerOfferingStats = next;
+        state.OfferingRevision++;
+        conn.Pools = PoolsFor(conn, conn.Pools.Level);
+        conn.ApplyMovementSpeed();
+        conn.Minions.StatRevision++;
     }
 }
