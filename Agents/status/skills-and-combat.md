@@ -1234,6 +1234,7 @@ This is a research baseline, not new live skill acceptance or complete native/se
   full trap/mine skill-specific payloads, banner/Vaal executors and Agony's retail Virulence decay remain partial.
   ([11](../docs/protocol/11-skills.md) 13).
 - Animated equipment admission respects melee/ranged variants, identification, item level and six-socket weapon exclusion.
+- Persistent summons restore their gem source; spell repeats execute summon groups and stop on interruption.
   Summon/mine/trap input and cleanup work; special payloads remain partial ([11](../docs/protocol/11-skills.md) 10h).
 - Hexes/marks have limits and combat effects; reflection and special payloads remain partial (`MonsterCurses`).
 - Totems: Rejuvenation, adopted projectile spells and bow/wand ballistas execute ([11](../docs/protocol/11-skills.md) §10g).

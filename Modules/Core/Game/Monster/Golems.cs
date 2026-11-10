@@ -43,24 +43,13 @@ static partial class Game
         CharacterSaves.ChangeModuleData(CharacterName(conn), GolemSaveKey, _ => text);
     }
 
-    static async Task<bool> CastGolem(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
-        ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, int recovery, Func<bool> current)
-    {
-        double release = AreaTime(conn) + (CastMs(conn, definition.Effect, source) ?? 1000) / 1000.0;
-        var lifetime = CombatLifetime;
-        while (true)
+    internal static Task<bool> CastGolem(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
+        ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, int recovery, Func<bool> current) =>
+        RepeatSummonCast(conn, source, recovery, current, async () =>
         {
-            lock (conn.Monsters)
-            {
-                if (!CurrentGameWork || !ReferenceEquals(CombatLifetime, lifetime) || conn.Closed || conn.LeavingArea || conn.PlayerLife == 0
-                    || recovery != conn.ActionInterruptionGeneration || !current()) return false;
-                if (!conn.Paused && AreaTime(conn) >= release) break;
-            }
-            await AreaWait(PlayerUpdateRole.Minions, 25);
-        }
-        await SummonGolem(remote, stream, ciphers, conn, source, definition, aim, current: current);
-        return true;
-    }
+            await SummonGolem(remote, stream, ciphers, conn, source, definition, aim, current: current);
+            return true;
+        });
 
     internal static async Task<uint> SummonGolem(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
         ushort source, GolemCatalog.Definition definition, (int X, int Y) aim, double life = 1, bool arrival = false, Func<bool>? current = null)
