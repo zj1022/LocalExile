@@ -168,7 +168,7 @@ static partial class Game
                     {
                         int walkAction = 0;
                         if (!TryBeginSkillCooldownUse(conn, use.SkillId, gem.Effect,
-                            CooldownFor(conn, gem.Effect, gem.Level, gem.Quality), false,
+                            CooldownForSkill(conn, use.SkillId), false,
                             () => { at = Math.Max(at, ProjectileWorldTime(conn)); walkAction = Interlocked.Increment(ref conn.ActionCount); conn.Walk.Order(use.X, use.Y, at); conn.ChannelSkill = 0; },
                             out var approachTicket, reserve: false, requestedAt: at)) continue;
                         await Send(remote, stream, ciphers,
@@ -225,7 +225,7 @@ static partial class Game
                 if (cast && gem.Name is not null)
                 {
                     if (!TryBeginSkillCooldownUse(conn, use.SkillId, gem.Effect,
-                        CooldownFor(conn, gem.Effect, gem.Level, gem.Quality),
+                        CooldownForSkill(conn, use.SkillId),
                         false, StartAction, out cooldownUse, requestedAt: at)) continue;
                 }
                 else
