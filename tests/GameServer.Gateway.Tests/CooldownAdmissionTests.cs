@@ -43,6 +43,15 @@ public sealed class CooldownAdmissionTests
         Assert.Equal(3, c.SingleUseCooldowns[flame.Effect].SpentUses);
         Assert.Equal(1, c.SingleUseCooldowns[frost.Effect].SpentUses);
         Assert.Equal(1000u, c.PlayerMana); // Admission only plans payment; the accepted cast pays exactly once.
+        var expired = new SingleUseCooldownState(-100, 1);
+        var expiredPlan = new SingleUseCooldown(1000, 0, 3, 9);
+        for (int n = 0; n < 3; n++) Assert.True(expired.TryUse(-100, expiredPlan));
+        var activeDebts = c.SingleUseCooldowns.ToArray(); c.SingleUseCooldowns.Clear();
+        c.SingleUseCooldowns[-123] = expired; c.CooldownGroups[-123] = 9;
+        foreach (var debt in activeDebts) c.SingleUseCooldowns[debt.Key] = debt.Value;
+        c.SingleUseCooldowns.Remove(frost.Effect); c.SkillReadyAt.Remove(frost.Effect);
+        Assert.Equal(1, Game.CooldownStateLocked(c, frost.Effect, Game.CooldownForSkill(c, ids[1])!.Value, 0).SpentUses);
+
         // Native group 36 means per-skill: these two unrelated skills must retain independent pools.
         var independent = f.Equip(PlayerInventories.BodyArmour, "Frost Bomb", "Cold Snap");
         Assert.True(Start(independent[0], () => { }));
@@ -68,9 +77,19 @@ public sealed class CooldownAdmissionTests
         Game.RefreshSingleUseCooldowns(f.Conn);
         Assert.Same(state, f.Conn.SingleUseCooldowns[original.Effect]);
         Assert.Equal(1, state.SpentUses);
+        ushort second = copies.Single(g => g.Id != ids[0]).Id;
+        Assert.True(Game.TryBeginSkillCooldownUse(f.Conn, second, original.Effect,
+            Game.CooldownForSkill(f.Conn, second), false, () => { }, out _));
+        var dashId = f.Equip(PlayerInventories.BodyArmour, "Dash").Single();
+        var dash = Game.SupportedSkill(f.Conn, dashId);
+        f.Conn.SingleUseCooldowns[dash.Effect] = new(0, 1); // Dash has recovered while Flame Dash still owes uses.
+        Assert.True(Game.TryBeginSkillCooldownUse(f.Conn, dashId, dash.Effect,
+            Game.CooldownForSkill(f.Conn, dashId), false, () => { }, out _));
+        Assert.Equal(3, state.Uses); Assert.Equal(1d, state.Rate);
+
         foreach (var i in Game.ItemsOf(f.Conn).Items(PlayerInventories.Helmet)) Game.ItemsOf(f.Conn).Remove(PlayerInventories.Helmet, i.Id);
         Game.RefreshSingleUseCooldowns(f.Conn);
-        Assert.Same(state, f.Conn.SingleUseCooldowns[original.Effect]); Assert.Equal(1, state.SpentUses);
+        Assert.Same(state, f.Conn.SingleUseCooldowns[original.Effect]); Assert.Equal(3, state.SpentUses);
     }
 
     sealed class Fixture : IDisposable
