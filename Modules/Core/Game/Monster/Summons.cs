@@ -31,17 +31,19 @@ static partial class Game
             place.ItemId == 0 ? null : place.ItemId, place.ItemId == 0 ? null : place.Socket);
     }
 
-    internal static ushort RestoredSummonSource(ClientState conn, SummonedMinions.Saved saved)
+    internal static ushort RestoredSummonSource(ClientState conn, SummonedMinions.Saved saved) =>
+        RestoredMinionSource(conn, saved.Effect, saved.Source, saved.Host, saved.Socket);
+
+    static ushort RestoredMinionSource(ClientState conn, string effect, ushort source, uint? host, int? socket)
     {
-        var candidates = GemSkillEffects(conn).Where(g => SkillsFor(conn).EffectId(g.Effect) == saved.Effect).ToArray();
-        if (saved.Host is uint host && saved.Socket is int socket)
+        var candidates = GemSkillEffects(conn).Where(g => SkillsFor(conn).EffectId(g.Effect) == effect).ToArray();
+        if (host is uint item && socket is int index)
         {
-            var place = ItemsOf(conn).SocketedGemPlaces().FirstOrDefault(p => p.ItemId == host && p.Socket == socket);
+            var place = ItemsOf(conn).SocketedGemPlaces().FirstOrDefault(p => p.ItemId == item && p.Socket == index);
             return place.Gem is null ? (ushort)0 : candidates.FirstOrDefault(g =>
                 ReferenceEquals(SupportedSkill(conn, g.Id).SourceGem, place.Gem)).Id;
         }
-        // Older saves have only the skill id. Keep its exact matching source before the legacy fallback.
-        var exact = candidates.FirstOrDefault(g => g.Id == saved.Source);
+        var exact = candidates.FirstOrDefault(g => g.Id == source);
         return exact.Name is not null ? exact.Id : candidates.FirstOrDefault().Id;
     }
 
