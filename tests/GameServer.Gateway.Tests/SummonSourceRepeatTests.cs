@@ -12,6 +12,7 @@ public sealed class SummonSourceRepeatTests
     [Fact]
     public async Task Persistent_summons_restore_their_source_and_rebuild_only_the_affected_fighter()
     {
+        await VerifyGolemSources();
         using var f = new Fixture();
         var ids = f.Equip(("Raise Zombie", 1), ("Raise Zombie", 20));
         var def = Game.SummonData.Find("RaiseZombie")!;
@@ -44,6 +45,60 @@ public sealed class SummonSourceRepeatTests
         var replacement = f.Conn.Summons.Fighters.Values.Single(g => g.Source == ids[1]);
         Assert.NotEqual(original.Id, replacement.Id); Assert.Equal(19, replacement.GemLevel);
         Assert.InRange(replacement.Monster.Life / (double)replacement.Monster.MaxLife, prior - .001, prior + .001);
+    }
+
+    static async Task VerifyGolemSources()
+    {
+        using var f = new Fixture();
+        var schedule = new Schedule();
+        var oldContext = Game.AreaUpdateContext.Value;
+        Game.AreaUpdateContext.Value = new(f.Lifetime, schedule);
+        try
+        {
+            var ids = f.Equip(("Summon Stone Golem", 1), ("Summon Stone Golem", 20));
+            f.Conn.PlayerStats[Program.Stats.Key("base_number_of_golems_allowed")!.Value] = 1;
+            var def = Game.GolemData.Find("SummonStoneGolem")!;
+            var saved = new GolemState.Saved(def.Id, ids[1], .5);
+            CharacterSaves.ChangeModuleData(f.Conn.Character!, "Game.Golems", _ => JsonSerializer.Serialize(new[] { saved }));
+            f.Conn.Golems.Restored = false;
+            await Game.GolemsTick("test", f.Stream, f.Ciphers, f.Conn, 0);
+            var original = Assert.Single(f.Conn.Golems.All).Value;
+            Assert.Equal(ids[1], original.Source); Assert.Equal(20, original.GemLevel);
+            Game.SaveGolems(f.Conn);
+            var durable = JsonSerializer.Deserialize<GolemState.Saved[]>(CharacterSaves.Load(f.Conn.Character!)!.ModuleData!["Game.Golems"])!.Single();
+            Assert.Equal((uint)1, durable.Host); Assert.Equal(1, durable.Socket);
+            Assert.Equal(ids[1], Game.RestoredGolemSource(f.Conn, durable with { Skill = ids[0] }));
+            Assert.Equal((ushort)0, Game.RestoredGolemSource(f.Conn, durable with { Socket = 9 }));
+            Assert.Equal(ids[0], Game.RestoredGolemSource(f.Conn, saved with { Skill = 0 }));
+
+            uint other = await Game.SummonGolem("test", f.Stream, f.Ciphers, f.Conn, ids[0], def, (100, 100));
+            var preserved = f.Conn.Golems.All[other];
+            var prior = original.Monster.Life / (double)original.Monster.MaxLife;
+            Assert.Equal(0u, await Game.SummonGolem("test", f.Stream, f.Ciphers, f.Conn, ids[1], def,
+                (100, 100), replacing: original.Id, current: () => false));
+            Assert.Same(original, f.Conn.Golems.All[original.Id]);
+            var host = Game.ItemsOf(f.Conn).Items(PlayerInventories.Weapon1).Single();
+            var sockets = host.Item.Sockets.ToArray();
+            var gem = sockets[1].Gem!;
+            sockets[1] = sockets[1] with { Gem = gem with { GemExperience = Program.Items.Gem(Program.Items.ByHash(gem.TypeHash)!)!.ExperienceFor(19) } };
+            Game.ItemsOf(f.Conn).Change(PlayerInventories.Weapon1, host.Id, item => item with { Sockets = sockets });
+            f.Conn.Golems.RefreshAt = 0;
+            schedule.Time = 1;
+            await Game.GolemsTick("test", f.Stream, f.Ciphers, f.Conn, 1);
+            Assert.Same(preserved, f.Conn.Golems.All[other]);
+            var replacement = f.Conn.Golems.All.Values.Single(g => g.Source == ids[1]);
+            Assert.NotEqual(original.Id, replacement.Id); Assert.Equal(19, replacement.GemLevel);
+            Assert.InRange(replacement.Monster.Life / (double)replacement.Monster.MaxLife, prior - .001, prior + .001);
+
+            f.Conn.Golems.Waiting.Add(new(durable with { Skill = ids[0], ReviveSeconds = .1 }, 2));
+            f.Conn.Golems.Waiting.Add(new(durable with { Socket = 9, ReviveSeconds = .1 }, 2));
+            schedule.Time = 2;
+            await Game.GolemsTick("test", f.Stream, f.Ciphers, f.Conn, 2);
+            Assert.Empty(f.Conn.Golems.Waiting);
+            Assert.Equal(2, f.Conn.Golems.All.Count);
+            Assert.All(f.Conn.Golems.All.Values, golem => Assert.Equal(ids[1], golem.Source));
+        }
+        finally { Game.AreaUpdateContext.Value = oldContext; }
     }
 
     [Fact]
