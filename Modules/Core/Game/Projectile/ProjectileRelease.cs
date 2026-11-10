@@ -290,6 +290,7 @@ static partial class Game
             ActualCaster = totem is null ? null : TotemCasterStats(player),
             Effect = gem.Effect, Level = gem.Level, Quality = gem.Quality, SourceSkill = skillId,
             SkillStats = new Dictionary<uint, int>(own),
+            CriticalTrigger = spell ? null : CaptureCriticalTriggerSource(conn, skillId),
             Penetration = Penetration.Of(player, Stats, !spell, own, local), ResistanceMods = HitResistMods(player, own),
             ImpaleSettings = ImpaleStats.From(player, Stats, !spell, own, local),
             CriticalImpaleSettings = ImpaleStats.From(player, Stats, !spell, own, local, critical: true),
