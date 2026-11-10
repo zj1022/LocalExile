@@ -87,6 +87,16 @@ public sealed class SummonSourceRepeatTests
             var golem = Assert.Single(f.Conn.Golems.All).Value;
             double interval = (Game.CastMs(f.Conn, Game.SupportedSkill(f.Conn, source).Effect, source) ?? 0) / 1000d;
             Assert.True(golem.SummonedAt >= start + interval * 2);
+            source = Echo("Animate Weapon");
+            var bow = new WorldItemObject(100, 100, ItemCatalog.Create(Program.Items.Find("Crude Bow")!));
+            uint rejected = f.Conn.Instance.Ground.Add(bow);
+            var sword = ItemCatalog.Create(Program.Items.Find("Rusted Sword")!);
+            f.Conn.Instance.Ground.Add(new(100, 100, sword));
+            f.Conn.Instance.Ground.Add(new(100, 100, sword));
+            Assert.True(await Game.CastSummon("test", f.Stream, f.Ciphers, f.Conn, source,
+                Game.SummonData.Find("AnimateWeapon")!, (100, 100), 0, recovery, () => true));
+            Assert.Equal(2, f.Conn.Summons.Fighters.Values.Count(g => g.Definition.Kind == "AnimatedWeapon"));
+            Assert.Same(bow, f.Conn.Instance.Ground.Get(rejected));
         }
         finally { Game.AreaUpdateContext.Value = oldContext; }
     }
