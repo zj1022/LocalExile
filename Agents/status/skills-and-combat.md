@@ -1262,6 +1262,7 @@ This is a research baseline, not new live skill acceptance or complete native/se
   ([11](../docs/protocol/11-skills.md) 13).
 - Persistent summons and golems restore their gem source and replace only the affected fighter on rescaling;
   spell repeats execute summon groups and stop on interruption.
+- Convocation and Offerings execute manually or through linked triggers; bespoke companions remain partial.
 - Animated equipment admission respects melee/ranged variants, identification, item level and six-socket weapon exclusion.
   Summon/mine/trap input and cleanup work; special payloads remain partial ([11](../docs/protocol/11-skills.md) 10h).
 - Hexes/marks have limits and combat effects; reflection and special payloads remain partial (`MonsterCurses`).

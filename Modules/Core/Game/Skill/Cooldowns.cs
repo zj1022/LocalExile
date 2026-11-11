@@ -16,8 +16,12 @@ public static partial class Game
     {
         var supported = SupportedSkill(conn, skillId);
         if (supported.Effect < 0) return null;
+        var player = CharacterPlayerStats(conn);
+        if (SkillsFor(conn).EffectId(supported.Effect) is "Convocation" or "ConvocationOld"
+            && Stats.Key("base_cooldown_speed_+%") is uint recovery)
+            supported.Stats[recovery] = supported.Stats.GetValueOrDefault(recovery) + GolemStat(player, "convocation_cooldown_speed_+%");
         return WithMapCooldown(conn, SingleUseCooldown.ForSkill(SkillsFor(conn), Stats, supported.Effect, supported.Level,
-            CharacterPlayerStats(conn), supported.Stats));
+            player, supported.Stats));
     }
 
     public static SingleUseCooldownState CooldownStateLocked(ClientState conn, int effect, SingleUseCooldown plan, double now)
