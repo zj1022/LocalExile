@@ -1491,10 +1491,11 @@ Live 2026-10-18 with the Witch's Fireball. Code: `SkillCatalog.EffectStats`, `Ge
   A projectile's creation gate ends action cancellation; released flights continue with their existing area lifetime.
   Ordinary stored uses and Second Wind share the recovery state; spent uses recover one at a time.
   The first native queue entry retains progress, while later entries retain their full base-time budget.
-  Duplicate same-effect gems, other extra-use sources, flat/override and pause-while-active mechanics retain legacy
-  `SkillReadyAt` raw deadlines.
-  Shared cooldown groups, bypass, conditional/enemy recovery, typed/more recovery and official tick equivalence are
-  outside this generic one-use implementation.
+  Same-effect gems retain shared recharge debt; recovery/capacity use the actual admitted socket instance.
+  Native GEPL groups debit each available member once; group 36 stays per-effect. Peer progress is published only
+  after the admitted use acknowledgement. Equipping a new group member inherits outstanding recovery debt.
+  Unpayable ordinary uses are rejected before cooldown reservation and movement. Other extra-use sources,
+  flat/override, pause-while-active, bypass, conditional/enemy recovery and official tick equivalence remain partial.
   A zero recovery rate stalls a spent use.
   Extreme input sums are bounded to avoid signed native `percent + 100` overflow.
 
@@ -1919,6 +1920,10 @@ Native flight/contact logic resides in action/Positioned paths, not this small c
   bounces straight on even beside monsters (`trace-chain-decisions.js`). The client reads the budget from the skill
   record it holds, which is only resent with the skill list: with 0 there (the server's ground chains are not
   `Chain`) the orb stopped at its first impact, and after the fix it bounced only once the gem was socketed again.
+  Lightning Strike's row is `Metadata/Projectiles/LightningSlash` (1600), not `LightningStrike`.
+  The 3.29.3c client creates its three bolts locally: a server create duplicates them.
+  A Positioned trace aimed left from (391,352) starts all three at (388,352), rather than the sword's contact point.
+  The native flights have different durations; their per-projectile speed variation is not yet mirrored.
   Spectral Throw's row is `Metadata/Projectiles/ThrownWeapon` (1000). Its action (ThrownWeaponProjectile, HASH16
   0xcf7b) draws its own weapon, as a spell does, so the server sends none. Frida 2026-11-02
   (`scripts/re/frida/trace-projectile-path.js`, Positioned path of the client's object): the weapon slows evenly to a
@@ -2593,9 +2598,11 @@ Projectile totems use a proxy Actor skill `0x4000` with `Parent = (PlayerId, sou
 Fireball's `SkillTotemId = 22` has no dedicated variation; generic intelligence/dexterity skins are
 `SkillTotemVariations` keys 3/2, skin 0, varieties 2272/2273. The proxy carries the underlying skill's
 GEPL/statset and clears placement flags; its own entity sends the action and owns/emits the projectile.
+On 3.29.3c the proxy action alone does not draw Spark. Its Projectiles.dat flight clip on server-created objects displays the simulated sparks.
 The installed support statset supplies 8000 ms duration, -40% final cast speed and level-one -55% final damage.
 Its `totem_support_gem_level` supplies the monster level. Only placement pays player costs. The actual caster inherits
-owner offensive stats and type prohibitions, with the owner's `spell_skills_deal_no_damage` removed (Ancestral Bond).
+owner offensive stats and type prohibitions. Ancestral Bond is `keystone_ancestral_bond` (key 5336), not
+`spell_skills_deal_no_damage` (5341, Gruthkul's Pelt); only the former's owner-only restriction is bypassed by proxies.
 The existing tick selects enemies and queues cancellable casts; source item/host removal, death, replacement, expiry,
 transfer and module retirement stop pending releases.
 Siege/Shrapnel Ballista's native `TotemSnipe`/`TotemShotgun` actions bypass the generic projectile lookup;

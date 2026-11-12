@@ -722,7 +722,7 @@ public static partial class Game
             return;
         }
         var (x, y) = conn.Walk.Position(conn.Clock.Elapsed.TotalSeconds);
-        var ground = new WorldItemObject(x, y, held.Item);
+        var ground = new WorldItemObject(x, y, held.Item) { PlayerDropped = true };
         uint id = conn.Instance.Ground.Add(ground, conn);
         await SendGroundItem(remote, stream, ciphers, conn, id, ground,
             $"0x02bb create world item 0x{id:x} at ({x}, {y})", justDropped: true);
@@ -779,37 +779,12 @@ public static partial class Game
         byte row = toCursor ? PlayerInventories.Cursor : PlayerInventories.MainInventory;
         if (!toCursor && shape.MaxStack > 1)
         {
-            // A stack goes onto the inventory's stacks of its type first, then into free cells; all of it or nothing. Nothing
-            // awaits between the check, the take and the add, and only this connection changes the character's items.
-            PlayerInventories.Stacking stacked;
-            WorldItemObject? rest = null;
-            uint restId = 0;
+            GroundPickup? pickup;
             lock (conn.Monsters)
             {
-                if (HardcoreProgressBlocked(conn)) return;
-                if (!items.Fits(PlayerInventories.MainInventory, ground.Item, ShapeOf))
-                {
-                    Console.WriteLine($"[gateway] {remote} world item 0x{id:x}: no room in the inventory for {ground.Item.StackSize}");
-                    return;
-                }
-                if (conn.Instance.Ground.Take(id) is null) return;   // already picked up
-                stacked = KeepOnGroundIfNotSaved(conn, ground, () => items.AddStacked(PlayerInventories.MainInventory, ground.Item, ShapeOf));
-                if (stacked.Left > 0)
-                {
-                    // Fits said yes, so this is not expected; the rest goes back on the ground rather than vanish.
-                    rest = new WorldItemObject(ground.GridX, ground.GridY, ground.Item with { StackSize = (ushort)stacked.Left });
-                    restId = conn.Instance.Ground.Add(rest, conn, shared: true, justDropped: false);
-                }
+                if (HardcoreProgressBlocked(conn) || (pickup = TakeGroundStack(conn, id, ground)) is null) return;
             }
-            if (rest is not null)
-            {
-                Console.WriteLine($"[gateway] {remote} world item 0x{id:x}: {stacked.Left} didn't fit, back on the ground as 0x{restId:x}");
-                await SendWorldCreate(remote, stream, ciphers, conn, restId, InstanceEntities.CreateObject(restId, InstanceEntities.ObjectTypeHash(WorldItemObject.MetadataPath), rest.Blob()),
-                    $"0x02bb create world item 0x{restId:x} (the rest of 0x{id:x})");
-            }
-            await Game.SendWorldRemoval(remote, stream, ciphers, conn, id, $"0x02bd remove world item 0x{id:x} (picked up from ({stop.X}, {stop.Y}))");
-            await Send(remote, stream, ciphers, InstanceItems.InventoryChange(PlayerInventories.InventoryId(row), items.NextRevision(row), stacked.RemovedIds, stacked.AddedItems),
-                $"0x00bf inventory 1: {ground.Item.StackSize} picked up ({stacked.Changed.Count} stack(s) grown, {stacked.Added.Count} new)");
+            await SendPickup(remote, stream, ciphers, conn, id, pickup);
             return;
         }
         InventoryItem? placed;
@@ -879,13 +854,52 @@ public static partial class Game
                     > SystemSettings.Default.GoldAutoLootRadius) return null;
                 var (by, shared) = conn.Instance.Ground.Origin(id);
                 if (!shared && !ReferenceEquals(by, conn)) return null;
-                if (conn.Instance.Ground.Take(id, ground) is null) return null;
-                uint total = KeepOnGroundIfNotSaved(conn, ground,
-                    () => PersonalStashOf(conn).AddGold(ground.Item.StackSize), id);
+                if (TakeGroundStack(conn, id, ground) is not { } pickup) return null;
                 conn.SeenGround.Remove(id);
-                return [.. InstanceProtocol.RemoveObject(id), .. InstanceEntities.Gold(total)];
+                return [.. InstanceProtocol.RemoveObject(id), .. pickup.Update];
             }
         });
+    }
+
+    sealed record GroundPickup(byte[] Update, string Log, uint RestId = 0, WorldItemObject? Rest = null);
+
+    static async Task SendPickup(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
+        uint id, GroundPickup pickup)
+    {
+        if (pickup.Rest is { } rest)
+            await SendWorldCreate(remote, stream, ciphers, conn, pickup.RestId,
+                InstanceEntities.CreateObject(pickup.RestId, InstanceEntities.ObjectTypeHash(WorldItemObject.MetadataPath), rest.Blob()),
+                $"0x02bb create remainder 0x{pickup.RestId:x} from 0x{id:x}");
+        await SendWorldRemoval(remote, stream, ciphers, conn, id, $"0x02bd remove world item 0x{id:x} (pickup)");
+        await Send(remote, stream, ciphers, pickup.Update, pickup.Log);
+    }
+
+    // Manual and mod pickup share the same commit. Capture the inventory revision before releasing the lock.
+    static GroundPickup? TakeGroundStack(ClientState conn, uint id, WorldItemObject ground)
+    {
+        if (IsGold(ground))
+        {
+            if (conn.Instance.Ground.Take(id, ground) is null) return null;
+            uint total = KeepOnGroundIfNotSaved(conn, ground,
+                () => PersonalStashOf(conn).AddGold(ground.Item.StackSize), originalId: id);
+            return new(InstanceEntities.Gold(total), $"0x02aa gold: {total} (+{ground.Item.StackSize})");
+        }
+        var items = ItemsOf(conn);
+        if (!items.Fits(PlayerInventories.MainInventory, ground.Item, ShapeOf)
+            || conn.Instance.Ground.Take(id, ground) is null) return null;
+        var stacked = KeepOnGroundIfNotSaved(conn, ground,
+            () => items.AddStacked(PlayerInventories.MainInventory, ground.Item, ShapeOf), originalId: id);
+        WorldItemObject? rest = null;
+        uint restId = 0;
+        if (stacked.Left > 0)
+        {
+            rest = new WorldItemObject(ground.GridX, ground.GridY,
+                ground.Item with { StackSize = (ushort)stacked.Left }) { PlayerDropped = ground.PlayerDropped };
+            restId = conn.Instance.Ground.Add(rest, conn, shared: true, justDropped: false);
+        }
+        return new(InstanceItems.InventoryChange(PlayerInventories.InventoryId(PlayerInventories.MainInventory),
+            items.NextRevision(PlayerInventories.MainInventory), stacked.RemovedIds, stacked.AddedItems),
+            "pickup inventory", restId, rest);
     }
 
     // A pickup whose save fails puts the item back on the ground before the error closes the connection: it left the ground
@@ -1304,7 +1318,8 @@ public static partial class Game
         else if (row == PlayerInventories.PassiveJewels
             && items.Items(row).FirstOrDefault(i => i.Id == a.ItemId) is { } leavingBypass
             && AllocationBypassRemovalRefusal(conn, leavingBypass) is { } bypassRefusal) why = bypassRefusal;
-        else done = items.MergeOnto(row, a.ItemId, ShapeOf, out why, OneOf(a));
+        else done = items.MergeOnto(row, a.ItemId, ShapeOf, out why, OneOf(a),
+            expandedAllowed: row == PlayerInventories.ExpandedInventory && ExpandedInventoryGranted(conn));
         if (done is null && PlayerInventories.Row(a.InventoryId) is byte lr && LevelTooLow(conn, lr, held) is { } tooLow) why = tooLow;
         if (done is null)
         {
@@ -1368,7 +1383,8 @@ public static partial class Game
         else if (row == PlayerInventories.PassiveJewels
             && PassiveJewelRefusal(conn, (int)place.X, (int)place.Y, placement) is { } refusal) why = refusal;
         else
-            done = items.Place(row, (int)place.X, (int)place.Y, ShapeOf, out why, one: place.A != 0);
+            done = items.Place(row, (int)place.X, (int)place.Y, ShapeOf, out why, one: place.A != 0,
+                expandedAllowed: row == PlayerInventories.ExpandedInventory && ExpandedInventoryGranted(conn));
         if (done is null)
         {
             Console.WriteLine($"[gateway] {remote} <= 0x002a place {place}: refused ({why})");
