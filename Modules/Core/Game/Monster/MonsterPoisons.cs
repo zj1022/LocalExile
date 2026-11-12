@@ -14,7 +14,7 @@ public static partial class Game
     {
         var merged = MergeSkillStats(player, SupportedSkill(conn, skillId).Stats);
         string hand = spell ? "spell" : "main_hand";
-        return MonsterPoisons.Settings.From(SupportedAilmentRows(conn, skillId, hand, weapon, addedChaos), hand,
+        return MonsterPoisons.Settings.From(SupportedAilmentRows(conn, skillId, hand, weapon, addedChaos: addedChaos), hand,
             name => Stats.Key(name) is uint key ? merged.GetValueOrDefault(key) : 0,
             spell || weapon is not null ? null : MainHandLocalSources(conn));
     }
