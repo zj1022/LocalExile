@@ -20,16 +20,20 @@ public class StashAddTabsTests
         var stash = Open(catalog, account);
         int roots = stash.VisibleCount;
         stash.EnsureMapChildren();   // 191 hidden pages of the starter map tab
-        Assert.Equal(191, stash.Count - roots);
+        int start = stash.Count;
+        int map = Enumerable.Range(0, roots).First(i => stash.TabType(i) == StashRules.Map);
+        Assert.Equal(191, stash.UniqueChildren(map).Count);
+        int collection = Enumerable.Range(0, roots).First(i => stash.TabType(i) == StashRules.Unique);
+        Assert.Equal(start - roots - 191, stash.UniqueChildren(collection).Count);
         Assert.Equal(roots, stash.VisibleCount);
 
         var first = stash.AddTabs(7, 2, "Quad", 0x8a, 0x2b, 0xe2);
         var second = stash.AddTabs(7, 1, "Quad", 0x8a, 0x2b, 0xe2);
-        Assert.Equal(new[] { roots + 191, roots + 192 }, first);
-        Assert.Equal(new[] { roots + 193 }, second);
+        Assert.Equal(new[] { start, start + 1 }, first);
+        Assert.Equal(new[] { start + 2 }, second);
         Assert.Equal(roots + 3, stash.VisibleCount);
         Assert.All(first.Concat(second), i => Assert.Equal((byte)7, stash.TabType(i)));
-        var names = Enumerable.Range(roots + 191, 3).Select(stash.NameOf).ToArray();
+        var names = Enumerable.Range(start, 3).Select(stash.NameOf).ToArray();
         Assert.Equal(3, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.All(names, n => Assert.StartsWith("Quad ", n));
 
@@ -37,7 +41,7 @@ public class StashAddTabsTests
         AccountStash.Forget(account);
         var reloaded = AccountStash.For(account, catalog);
         Assert.Equal(roots + 3, reloaded.VisibleCount);
-        Assert.Equal(names, Enumerable.Range(roots + 191, 3).Select(reloaded.NameOf).ToArray());
+        Assert.Equal(names, Enumerable.Range(start, 3).Select(reloaded.NameOf).ToArray());
 
         Assert.Throws<ArgumentOutOfRangeException>(() => reloaded.AddTabs(99, 1, "Quad", 0, 0, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => reloaded.AddTabs(0, 0, "Quad", 0, 0, 0));
