@@ -1197,19 +1197,7 @@ public static partial class Game
                 }
             }
         }
-        // Sacrifice: the use pays its share of current life and gains the listed share of it as added chaos damage.
-        int addedChaos = 0;
-        {
-            var sacStats = SupportedSkill(conn, skillId).Stats;
-            int Sac(string name) => Stats.Key(name) is uint key ? sacStats.GetValueOrDefault(key) : 0;
-            int percent = Sac("support_sacrifice_sacrifice_%_of_current_life");
-            if (percent > 0 && conn.PlayerLife > 1)
-            {
-                int sacrificed = (int)Math.Min((long)conn.PlayerLife - 1, (long)conn.PlayerLife * percent / 100);
-                conn.PlayerLife -= (uint)sacrificed;
-                addedChaos = (int)((long)sacrificed * Sac("support_sacrifice_gain_%_of_sacrificed_life_as_added_chaos_damage") / 100);
-            }
-        }
+        var sacrifice = new SacrificeUse(conn, skillId, gem.Effect, gem.Gem);
         // Spell Cascade: the spell also lands in the areas beside the target, one per side along the aim and, with
         // support_spell_cascade_sideways, one per side across it. Each centre is one effective radius from the aim
         // (live 2026-11-04: Reap at the character's area of effect had radius 28.5 and repeats 28-29 cells apart; the
@@ -1249,7 +1237,7 @@ public static partial class Game
             for (int repeat = 0; repeat <= spellRepeats; repeat++)
                 foreach (var area in cascadeAreas.Prepend(to))
                     jobs.Add(PlaceStormCall(remote, stream, ciphers, conn, skillId, gem, area, repeat, actionToken, cooldownUse,
-                        criticalRoll, addedChaos));
+                        criticalRoll, sacrifice));
             return Task.WhenAll(jobs);
         }
         for (int repeat = 0; repeat <= Math.Max(spellRepeats, meleeRepeats); repeat++)
@@ -1257,13 +1245,13 @@ public static partial class Game
             // Dark Bargain explodes at skeletons (or the player), not at the aim: each repeat pays and chains again.
             if (darkBargain)
             {
-                jobs.Add(DarkBargainCast(remote, stream, ciphers, conn, skillId, gem, to, repeat, actionToken, cooldownUse, criticalRoll, addedChaos));
+                jobs.Add(DarkBargainCast(remote, stream, ciphers, conn, skillId, gem, to, repeat, actionToken, cooldownUse, criticalRoll, sacrifice));
                 continue;
             }
             void Hit((int X, int Y) centre) => jobs.Add(AreaSkillHit(remote, stream, ciphers, conn, skillId, gem, from,
                 centre, immediate: channelled, sequence: sequence, actionToken: actionToken, cooldownUse: cooldownUse,
                 criticalRoll: criticalRoll, channelGeneration: channelGeneration, targetId: targetId, repeat: repeat, swingAt: swingAt,
-                repeatDelay: repeat * repeatInterval, radiusMore: fistRadius, addedChaos: addedChaos,
+                repeatDelay: repeat * repeatInterval, radiusMore: fistRadius, sacrifice: sacrifice,
                 damageMore: fistMore * (meleeRepeats > 0 ? MeleeRepeatDamageMore(conn, skillId, repeat) : 1), discharge: discharge));
             Hit(to);
             foreach (var area in cascadeAreas) Hit(area);
@@ -1444,21 +1432,21 @@ public static partial class Game
         bool immediate = false, ushort sequence = 0, int? actionToken = null, CooldownUseTicket? cooldownUse = null, bool? melee = null,
         double damageMore = 1, uint excludeMonster = 0, SkillCriticalRoll? criticalRoll = null, int? channelGeneration = null,
         uint targetId = 0, int repeat = 0, int? radiusOverride = null, ISet<uint>? once = null, double repeatDelay = 0,
-        double radiusMore = 1, int addedChaos = 0, double? swingAt = null, Func<bool>? triggeredCurrent = null,
-        DischargeUse? discharge = null, uint? singleStrikeTarget = null, Action<uint>? onHit = null, ProjectileSession? scheduledSession = null) =>
+        double radiusMore = 1, SacrificeUse? sacrifice = null, double? swingAt = null, Func<bool>? triggeredCurrent = null,
+        DischargeUse? discharge = null, uint? singleStrikeTarget = null, Action<uint>? onHit = null, ProjectileSession? scheduledSession = null, int scaledBlastChaos = 0) =>
         AreaSkillHitStrike(remote, stream, ciphers, conn, skillId, gem, from, to, immediate, sequence, actionToken, cooldownUse,
             melee, damageMore, excludeMonster, criticalRoll, channelGeneration, targetId, repeat, radiusOverride, once,
-            repeatDelay, radiusMore, addedChaos, swingAt, triggeredCurrent, discharge, 0, null, null, null,
-            singleStrikeTarget, onHit, scheduledSession);
+            repeatDelay, radiusMore, sacrifice, swingAt, triggeredCurrent, discharge, 0, null, null, null,
+            singleStrikeTarget, onHit, scheduledSession, scaledBlastChaos);
 
     private static async Task AreaSkillHitStrike(string remote, NetworkStream stream, ConnectionCiphers ciphers, ClientState conn,
         ushort skillId, (ushort Id, int Effect, string Name, int Level, int Quality, uint Gem) gem, (int X, int Y) from, (int X, int Y) to,
         bool immediate, ushort sequence, int? actionToken, CooldownUseTicket? cooldownUse, bool? melee,
         double damageMore, uint excludeMonster, SkillCriticalRoll? criticalRoll, int? channelGeneration,
         uint targetId, int repeat, int? radiusOverride, ISet<uint>? once, double repeatDelay,
-        double radiusMore, int addedChaos, double? swingAt, Func<bool>? triggeredCurrent, DischargeUse? discharge,
+        double radiusMore, SacrificeUse? sacrifice, double? swingAt, Func<bool>? triggeredCurrent, DischargeUse? discharge,
         int strikeIndex, double? firstContactAt, double? ruthlessMore, ISet<uint>? priorTargets,
-        uint? singleStrikeTarget, Action<uint>? onHit, ProjectileSession? scheduledSession)
+        uint? singleStrikeTarget, Action<uint>? onHit, ProjectileSession? scheduledSession, int scaledBlastChaos)
     {
         var paidVaal = SkillsFor(conn).VaalBudget(gem.Effect, gem.Level) is null ? null : conn.VaalUse;
         var hitPlan = SkillHitPlan.ForSkill(SkillsFor(conn), gem.Effect, gem.Level, gem.Quality);
@@ -1478,6 +1466,7 @@ public static partial class Game
             && (channelGeneration is not int generation || ChannelCurrent(conn, skillId, actionToken ?? conn.ActionCount, generation));
         if (!Current()) return;
         var criticalTrigger = spell ? null : CaptureCriticalTriggerSource(conn, skillId);
+        sacrifice ??= new SacrificeUse(conn, skillId, gem.Effect, gem.Gem, triggered: triggeredCurrent is not null);
         var skillStats = SupportedSkill(conn, skillId).Stats;
         // An attack gem's share of the weapon's damage ("Deals 177.3% of base Attack Damage"): the hit below uses it.
         int effectiveness = SkillsFor(conn).DamageEffectiveness(gem.Effect, gem.Level);
@@ -1571,6 +1560,8 @@ public static partial class Game
             await WhilePaused(conn);
             if (Replaced() || conn.Closed || !Current()) return;
         }
+        int addedChaos;
+        bool sacrificedLife = false;
         double contactAt = firstContactAt ?? conn.Clock.Elapsed.TotalSeconds;
         int strikes = SkillMultiStrike.StrikeCount(SkillsFor(conn).EffectId(gem.Effect), Stat("base_skill_number_of_additional_hits"),
             immediate, channelGeneration is not null, spell, wave);
@@ -1589,7 +1580,8 @@ public static partial class Game
         using (ProjectileMutation(conn, advance: scheduledSession is null))
         {
             double now = ProjectileWorldTime(conn);
-            if (!Current()) return;
+            if (!Current() || !sacrifice.Current) return;
+            addedChaos = sacrifice.AddedChaos(() => sacrificedLife = true);
             // A freeze or stun that landed after this stage was paid interrupts it before the sweep.
             if (channelGeneration is not null
                 && PlayerActionBlocked(conn, conn.Clock.Elapsed.TotalSeconds, conn.Clock.Elapsed.TotalSeconds)) return;
@@ -1643,6 +1635,8 @@ public static partial class Game
                     }
             }
         }
+        if (sacrificedLife)
+            await Send(remote, stream, ciphers, [], null, atGate: sacrifice.LifePacket);
         bool fortificationGranted = false; // One simultaneous sweep, independent of notification latency.
         bool rageGranted = false; // Only a positive gain takes this sweep's latch.
         double bloodMore = BloodChargeDamageMore(conn, Stat);
@@ -1702,12 +1696,9 @@ public static partial class Game
                     var local = spell || shield is not null ? null : MainHandLocalSources(conn);
                     pen = Penetration.Of(player, Stats, attack: !spell, skillStats, local);
                     mods = HitResistMods(player, skillStats);
-                    // Discharge's hit counts the charges of its use, not those left after an earlier repeat spent them.
-                    sweepHit = shield is null
-                        ? discharge is null ? SupportedHit(conn, skillId) : SupportedHitFor(conn, skillId, suppress: true, charges: discharge.Charges)
-                        : SupportedHitFor(conn, skillId, suppress: true, weapon: shield);
+                    sweepHit = SupportedHitFor(conn, skillId, suppress: true, weapon: shield, charges: discharge?.Charges, addedChaos: addedChaos);
                     if (ruthless != 1) sweepHit = sweepHit.Scale(ruthless);
-                    if (addedChaos > 0) sweepHit = sweepHit.Add(DamageType.Chaos, new(addedChaos, addedChaos));
+                    if (scaledBlastChaos > 0) sweepHit = sweepHit.Add(DamageType.Chaos, new(scaledBlastChaos, scaledBlastChaos));
                     if (spell && repeat > 0) sweepHit = sweepHit.Scale(GreaterEchoHitMore(repeat, Stat));
                     sweepMultiplier = SupportedCriticalMultiplier(conn, skillId);
                     if (!spell) accuracy = SupportedAccuracy(conn, skillId);
@@ -1716,7 +1707,7 @@ public static partial class Game
                     criticalImpale = ImpaleStats.From(player, Stats, !spell, skillStats, local, critical: true);
                     ignite = SupportedIgnite(conn, skillId, spell, player, shield);
                     bleed = SupportedBleed(conn, skillId, spell, player, shield, melee: SkillsFor(conn).IsMelee(gem.Effect));
-                    poison = SupportedPoison(conn, skillId, spell, player, shield);
+                    poison = SupportedPoison(conn, skillId, spell, player, shield, addedChaos);
                 }
                 var contactHit = sweepHit;
                 if (VaalExecutor(conn, gem.Effect))
@@ -1886,9 +1877,9 @@ public static partial class Game
                 sequence: sequence, actionToken: actionToken, cooldownUse: cooldownUse, melee: melee, damageMore: damageMore,
                 excludeMonster: excludeMonster, criticalRoll: criticalRoll, channelGeneration: channelGeneration, targetId: targetId,
                 repeat: repeat, radiusOverride: radiusOverride, once: null, repeatDelay: repeatDelay, radiusMore: radiusMore,
-                addedChaos: addedChaos, swingAt: null, triggeredCurrent: triggeredCurrent, discharge: discharge,
+                sacrifice: sacrifice, swingAt: null, triggeredCurrent: triggeredCurrent, discharge: discharge,
                 strikeIndex: 1, firstContactAt: next, ruthlessMore: ruthlessMore, priorTargets: alreadyHit,
-                singleStrikeTarget: singleStrikeTarget, onHit: onHit, scheduledSession: scheduledSession);
+                singleStrikeTarget: singleStrikeTarget, onHit: onHit, scheduledSession: scheduledSession, scaledBlastChaos: scaledBlastChaos);
         }
     }
 
