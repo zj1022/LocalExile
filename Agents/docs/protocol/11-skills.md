@@ -3456,6 +3456,12 @@ BuffDefinitions row 1873 is `trauma`, with a countdown and stack count. The nati
   the allocated nodes at each step, `taunted_enemies_damage_taken_+%` from the stats last sent
   (`PlayerStatsWithCleared`). Each monster keeps the increased damage taken they give ([20](20-damage.md) §4).
 
+### Charged Dash projection and release
+
+The 3.29.3c client uses action `0x2d76` for both gems. The plan at `0x141d093a0` applies separate 60-cell radial and 90-cell path limits using `skill_travel_distance_+%`. The path update at `0x141d09a40` records wave centres every 10 cells. A release before the projection stops copies those recorded centres. A stopped projection also records its endpoint. The contact radius at `0x141d09f80` grows with travel distance and can add a separate final-contact bonus. Native wave copies start at `0x141d09110` and their sampled contacts advance about one area frame apart.
+
+The predictive client turns the active projection when the server sends `0x01ad` for the changed aim. The shared release action locally tries to teleport either gem. The server sends its authoritative landing (`0x01b7`) immediately after the finish (`0x01ae`). The normal gem can step back from the projection endpoint to a legal standing cell; the Projection gem's authoritative landing is its current cell.
+
 ### Cyclone area updates (2026-10-25)
 
 `/set_aoe` sends the increased-area input, but Cyclone's visual also needs the final
