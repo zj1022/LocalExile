@@ -1508,6 +1508,8 @@ public static partial class Game
                 if (paid && Supports.Of(gem.Effect)?.Types.Contains(47) == true && !IsTotemSkill(player, skillId))
                 {
                     channelGeneration = BeginPaidChannel(player, skillId, gem.Effect, action, sequence);
+                    if (IsBladeFlurry(player, gem.Effect))
+                        BeginBladeFlurry(player, paymentGem, skillId, action, channelGeneration.Value, sequence, to);
                     if (paidMomentum is { } channelMomentum)
                     {
                         GainMomentumOnUse(player, skillId, channelMomentum, action, channelGeneration, AreaTime(player));
@@ -1517,7 +1519,7 @@ public static partial class Game
                     player.ChannelMovement = channelWalk is int walkPercent ? (skillId, walkPercent) : default;
                     if (walkChanges) player.ApplyMovementSpeed();
                     player.LastLockstepChannelAim = null;
-                    player.LockstepChannelAimPending = HeldLockstepMovingChannel(player);
+                    player.LockstepChannelAimPending = HeldLockstepAimedChannel(player);
                     if (GolemStat(SupportedSkill(player, skillId).Stats, Stat.CastWhileChannellingTimeMs) > 0)
                         BeginChannelTriggers(player, ProjectilesFor(player), skillId,
                             action, player.ChannelGeneration, to, AreaTime(player));
@@ -2409,7 +2411,12 @@ public static partial class Game
                     firstStagePaid = false;
                 }
                 else if (!PayMana(player, skillId, out cost, out lifeCost, 100, useSpell: false))
-                { player.ChannelSkill = 0; player.ChannelGeneration++; player.PaidChannel = null; }
+                {
+                    _ = ReleaseBladeFlurry(player, now);
+                    player.ChannelSkill = 0;
+                    player.ChannelGeneration++;
+                    player.PaidChannel = null;
+                }
                 else
                 {
                     if (CombatLifetime is not { IsActive: true } rules) player.PaidChannel = null;
@@ -2478,6 +2485,7 @@ public static partial class Game
             if (orbEffect != 0) WinterOrbRelease(player, generation, action);
             if (snipe) await SnipeRelease(player, generation, action);
             if (scourge) RetireScourgeChannel(player, generation, action);
+            RetireBladeFlurry(player, generation);
             if (!player.Connection.LockstepClient)
                 await EmitPredictiveChannelFinished(player, generation, channelSequence);
             if (divineIreStages > 0 && !player.Closed && !player.LeavingArea
@@ -2498,12 +2506,15 @@ public static partial class Game
     // whole screen away the moment the channel starts. The client walks Cyclone's player toward it at the movement speed
     // with the skill's final modifier, as an order re-aimed on every update; the sweeps follow that walk (RunChannel).
     // A channel that stands keeps the player where it is.
-    public static void ChannelAimedAt(Player player, int x, int y, double at)
+    public static void ChannelAimedAt(Player player, int x, int y, double at) => ApplyChannelAim(player, x, y, at);
+
+    static bool ApplyChannelAim(Player player, int x, int y, double at)
     {
         AimChannelTriggers(player, (x, y));
         SnipeAimedAt(player, (x, y));
         ScourgeAimedAt(player, (x, y));
         if (player.ChannelMovement.Skill != 0 && player.ChannelMovement.Skill == player.ChannelSkill) player.Walk.Order(x, y, at);
+        return AimBladeFlurry(player, (x, y));
     }
 
     // C→S 0x193 (class 0x1431767e8, writer 0x140911210, sender 0x14011ecb0): retarget an active held or channelled
@@ -2521,6 +2532,7 @@ public static partial class Game
         }
 
         bool aimLockstepChannel = false;
+        (ushort Sequence, (int X, int Y) Aim)? predictiveAim = null;
         {
             double now = AreaTime(player);
             double at = Math.Max(player.ClockAt(readAt), player.ProjectileRuntime?.Runtime.Now / 120000d ?? 0);
@@ -2564,12 +2576,14 @@ public static partial class Game
             }
             else if (player.ChannelSkill != 0)
             {
-                ChannelAimedAt(player, aim.X, aim.Y, at);
+                if (ApplyChannelAim(player, aim.X, aim.Y, at)) predictiveAim = (player.ChannelSkillSequence, aim);
                 player.LastChannelUpdateAt = now;
             }
         }
         if (aimLockstepChannel)
             await AimLockstepChannel(player);
+        else if (predictiveAim is { } changed)
+            await SendChannelAim(player, changed.Sequence, changed.Aim);
     }
 
     // C→S 0x199: the button let go. The channel ends, and a walking one stops where the player is (it was walking only
@@ -2577,6 +2591,7 @@ public static partial class Game
     public static void ChannelReleased(Player player, double at)
     {
         ReleaseScourgeChannel(player, at);
+        _ = ReleaseBladeFlurry(player, at);
         if (player.ChannelMovement.Skill != 0 && player.ChannelMovement.Skill == player.ChannelSkill)
         {
             var (x, y) = player.Walk.Position(at);
@@ -2600,6 +2615,7 @@ public static partial class Game
                     && player.LockstepSkill.Channel == player.ChannelSkillSequence
                 || IsSnipeChannelling(player, skill)
                 || IsScourgeChannelling(player, skill, generation, action)
+                || IsBladeFlurryChannelling(player, skill, generation, action)
                 || player.PaidChannel is { } paid && paid.Skill == skill
                     && (SkillsFor(player).EffectId(paid.Effect) is "LightningTendrils" or "LightningTendrilsAltX" or "LightningTendrilsAltY" or "LightningTendrilsRoyale"
                         || IsDivineIre(player, paid.Effect))
@@ -2708,7 +2724,7 @@ public static partial class Game
         int extraCriticalIncrease = 0, IReadOnlyList<uint>? additionalStrikeTargets = null,
         double hitAndAilmentMore = 1, Action<uint>? onDirectHit = null, bool allowMeleeSplash = true,
         BoneshatterContact? boneshatter = null, InfernalBlowUse? infernalBlast = null,
-        double? strikeSeconds = null) =>
+        double? strikeSeconds = null, BladeFlurryChannel? flurryRelease = null) =>
         AreaSkillHitStrike(player, skillId, gem, from, to, immediate, sequence, actionToken, cooldownUse,
             melee, damageMore, excludeMonster, criticalRoll, channelGeneration, targetId, repeat, radiusOverride, once,
             repeatDelay, radiusMore, sacrifice, swingAt, triggeredCurrent, discharge, 0, null, ruthlessMore, null, scaledBlastChaos,
@@ -2716,7 +2732,7 @@ public static partial class Game
             extraCriticalIncrease, targetFilter, extraStunThresholdReduction, extraStunDurationPct, extraKnockbackDistancePct,
             removeStunAndKnockback, offHandWeapon, additionalStrikeTargets: additionalStrikeTargets,
             hitAndAilmentMore: hitAndAilmentMore, onDirectHit: onDirectHit, allowMeleeSplash: allowMeleeSplash,
-            boneshatter: boneshatter, infernalBlast: infernalBlast, strikeSeconds: strikeSeconds);
+            boneshatter: boneshatter, infernalBlast: infernalBlast, strikeSeconds: strikeSeconds, flurryRelease: flurryRelease);
 
     private static async Task AreaSkillHitStrike(Player player,
         ushort skillId, (ushort Id, int Effect, string Name, int Level, int Quality, uint Gem) gem, (int X, int Y) from, (int X, int Y) to,
@@ -2733,7 +2749,7 @@ public static partial class Game
         IReadOnlyList<uint>? additionalStrikeTargets = null,
         double hitAndAilmentMore = 1, Action<uint>? onDirectHit = null, bool allowMeleeSplash = true,
         BoneshatterContact? boneshatter = null, InfernalBlowUse? infernalBlast = null,
-        double? strikeSeconds = null)
+        double? strikeSeconds = null, BladeFlurryChannel? flurryRelease = null)
     {
         var paidVaal = SkillsFor(player).VaalBudget(gem.Effect, gem.Level) is null ? null : player.VaalUse;
         var hitPlan = SkillHitPlan.ForSkill(SkillsFor(player), gem.Effect, gem.Level, gem.Quality);
@@ -2756,7 +2772,7 @@ public static partial class Game
             && (channelGeneration is not int generation || ChannelCurrent(player, skillId, actionToken ?? player.ActionCount, generation));
         if (!Current()) return;
         var currentGem = SupportedSkill(player, skillId);
-        var admittedGem = infernalBlast?.Source ?? aftershock?.Gem ?? currentGem;
+        var admittedGem = flurryRelease?.Source ?? infernalBlast?.Source ?? aftershock?.Gem ?? currentGem;
         bool linkedSource = aftershock is null && infernalBlast is null || currentGem.Effect == admittedGem.Effect
             && currentGem.Host == admittedGem.Host && ReferenceEquals(currentGem.SourceGem, admittedGem.SourceGem);
         var criticalTrigger = spell || !linkedSource ? null : CaptureCriticalTriggerSource(player, skillId);
@@ -2963,6 +2979,7 @@ public static partial class Game
         HashSet<uint>? elementalHitStruck = null;
         (int Radius, double More)? elementalHitSplash = null;
         int artVariation = ring ? SkillArtVariation(player, gem.Gem) : 0;
+        BladeFlurryBonus flurryBonus = default;
         double sweepStart = 0;
         double[] reach = [];
         int epoch = player.ProjectileEpoch;
@@ -2990,6 +3007,18 @@ public static partial class Game
                 ProjectilesFor(player).PlaceDivineBlastOrb(gem, centre, admittedGem, criticalRoll);
             // Queued mana output may outlast movement: resolve a channel at its current position.
             if (channelGeneration is not null) centre = player.Walk.Position(now);
+            BladeFlurryChannel? flurry = flurryRelease;
+            if (channelGeneration is int stageGeneration && IsBladeFlurry(player, gem.Effect))
+            {
+                if (!BladeFlurryChannels.TryGetValue(player, out flurry) || flurry.Generation != stageGeneration) return;
+                GainBladeFlurryStage(player, flurry);
+            }
+            if (flurry is not null)
+            {
+                if (!BladeFlurryContact(player, flurry, areaStats, now, flurryRelease is not null, out centre, out radius)) return;
+                flurryBonus = BladeFlurryStageBonus(flurry.Source.Stats, flurry.Stages, flurry.Maximum);
+                hitAndAilmentMore *= flurryBonus.Damage;
+            }
             if (aftershock is null && strikeIndex == 0 && Stat(global::Stat.IsPlayerEarthquake) != 0)
                 ScheduleEarthquakeAftershockLocked(player, skillId, gem, admittedGem, centre, sequence, hand, weapon,
                     offCritical, criticalRoll, now, radiusMore, damageMore, ruthless, cryExerted == true);
@@ -3292,7 +3321,8 @@ public static partial class Game
                         if (additionalIncreased != 0) blindedProfile = Profile(additionalIncreased);
                         pen = Penetration.Of(playerStats, Stats, attack: !spell, skillStats, local);
                         mods = HitResistMods(playerStats, skillStats);
-                        sweepMultiplier = aftershock?.CriticalMultiplier ?? SupportedCriticalMultiplier(player, skillId, sourceWeapon);
+                        sweepMultiplier = (aftershock?.CriticalMultiplier ?? SupportedCriticalMultiplier(player, skillId, sourceWeapon))
+                            + flurryBonus.CriticalMultiplier;
                         if (!spell) accuracy = aftershock?.Accuracy ?? SupportedAccuracy(player, skillId, hand);
                         leech = HitLeechSources(playerStats, !spell, skillStats, local, !spell && SkillsFor(player).IsMelee(gem.Effect));
                         impale = WeaponImpaleSettings(playerStats, Stats, !spell, skillStats, spell || shield is not null ? null : sourceWeapon);
@@ -3475,6 +3505,8 @@ public static partial class Game
                                     SupportedCriticalChanceVsBlinded(player, skillId, release: false, swingCritical, bleedingCrit),
                                     SupportedCriticalChanceVsGround(player, skillId, release: false, swingCritical, bleedingCrit));
                         }
+                        if (flurryBonus.CriticalMore != 0)
+                            criticalChance = Math.Min(10_000, (int)(criticalChance * flurryBonus.CriticalMore));
                         critical = RollCriticalStrike(player, shatteringCritical ? 10_000 : criticalChance, skillStats,
                                 attack: !spell, skillRoll: criticalRoll, playerStats: playerStats)
                             && (spell || GameServer.Core.World.EvasionEntropy.ConfirmsCritical(hitChance, player.AttackAccuracyRandom));

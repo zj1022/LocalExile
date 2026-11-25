@@ -401,6 +401,8 @@ Part of [Status](../Status.md); what to build next in this area is in
   [Paladin](../docs/game/paladin.md).
 - The player's debuffs on monsters: taunt, enemy auras, Intimidate, Unnerve and Wither.
   Docs: [11](../docs/protocol/11-skills.md) Â§12, [Paladin](../docs/game/paladin.md).
+- Player-cast Blade Flurry and Blade Flurry of Incision. Aimed acquisition, paid stages, and additional release strikes.
+  Docs: [11](../docs/protocol/11-skills.md#blade-flurry).
 - Cyclone's area of effect. Docs: [11](../docs/protocol/11-skills.md), "Cyclone area updates".
 - Self-targeted spells, including Convocation and corpse offerings. Docs: [11](../docs/protocol/11-skills.md) §9a.
 - Winter Orb. Docs: [11](../docs/protocol/11-skills.md) §9a.
