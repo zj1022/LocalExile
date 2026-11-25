@@ -2733,7 +2733,7 @@ public static partial class Game
         IReadOnlyList<uint>? additionalStrikeTargets = null,
         double hitAndAilmentMore = 1, Action<uint>? onDirectHit = null, bool allowMeleeSplash = true,
         BoneshatterContact? boneshatter = null, InfernalBlowUse? infernalBlast = null,
-        double? strikeSeconds = null)
+        double? strikeSeconds = null, LacerateUse? lacerate = null)
     {
         var paidVaal = SkillsFor(player).VaalBudget(gem.Effect, gem.Level) is null ? null : player.VaalUse;
         var hitPlan = SkillHitPlan.ForSkill(SkillsFor(player), gem.Effect, gem.Level, gem.Quality);
@@ -2743,20 +2743,21 @@ public static partial class Game
         // queued order, not a replacement of the swing. Everything else keeps the action-token rule (a Move cancels the
         // swing), and a real interruption (death, area change, pause, freeze, stun recovery) still ends this one.
         bool holdsItsSwing = repeat == 0 && !spell && !immediate && channelGeneration is null && SkillsFor(player).IsMelee(gem.Effect);
-        bool preservesSwing = repeat == 0 && (strikeIndex > 0 || shieldUse is not null)
+        bool preservesSwing = repeat == 0 && (strikeIndex > 0 || shieldUse is not null || lacerate is not null)
             && !spell && channelGeneration is null && SkillsFor(player).IsMelee(gem.Effect);
         int interruption = player.ActionInterruptionGeneration;
         bool TokenCurrent() => holdsItsSwing || preservesSwing
             ? PlayerStateAllowsAction(player)
             : cooldownUse?.Current(player) ?? (actionToken is null || player.ActionCount == actionToken);
         bool Current() => (triggeredCurrent?.Invoke() ?? true) && TokenCurrent()
+            && (lacerate?.Current(player) ?? true)
             && (repeat == 0 || spell || player.ActionInterruptionGeneration == interruption)
             && (SkillsFor(player).VaalBudget(gem.Effect, gem.Level) is null
                 || paidVaal is not null && VaalAdmissionCurrent(player, paidVaal))
             && (channelGeneration is not int generation || ChannelCurrent(player, skillId, actionToken ?? player.ActionCount, generation));
         if (!Current()) return;
         var currentGem = SupportedSkill(player, skillId);
-        var admittedGem = infernalBlast?.Source ?? aftershock?.Gem ?? currentGem;
+        var admittedGem = lacerate?.Source ?? infernalBlast?.Source ?? aftershock?.Gem ?? currentGem;
         bool linkedSource = aftershock is null && infernalBlast is null || currentGem.Effect == admittedGem.Effect
             && currentGem.Host == admittedGem.Host && ReferenceEquals(currentGem.SourceGem, admittedGem.SourceGem);
         var criticalTrigger = spell || !linkedSource ? null : CaptureCriticalTriggerSource(player, skillId);
@@ -2814,7 +2815,12 @@ public static partial class Game
         }
         criticalRoll ??= CaptureSkillCriticalRoll(player, skillId);
         // A dual-wielded attack's hand for this use (AttackHands): its weapon, time, hit, chance and local modifiers.
-        var hand = aftershock?.Hand ?? (spell ? AttackHand.Main : AttackHandFor(player, skillId, sequence));
+        var swingHands = lacerate?.Hand ?? aftershock?.Hand
+            ?? (spell ? AttackHand.Main : AttackHandFor(player, skillId, sequence));
+        if (lacerate is null && !immediate && !spell && LacerateEffect(SkillsFor(player).EffectId(gem.Effect)))
+            lacerate = StartLacerate(player, admittedGem, skillId, from, to, swingHands,
+                (swingAt ?? AreaTime(player)) + repeatDelay, radiusMore);
+        var hand = lacerate?.Hand ?? swingHands;
         var itemCriticalTrigger = spell ? null : CaptureItemCriticalTriggerSource(player, skillId, hand);
         var weapon = aftershock?.Weapon ?? HandWeapon(player, hand);
         // Read once per use: the per-victim hit log and the target-conditional critical chances reuse them.
@@ -2833,7 +2839,13 @@ public static partial class Game
         // swing's own clip (GemAttackContactDelay; the player swings where it stands, so without the walk-in offset).
         string? contactClip = null;
         double contactFraction = 0;
-        delay = aftershock is not null ? 0 : spell
+        if (lacerate is not null)
+        {
+            contactClip = lacerate.Clip;
+            contactFraction = lacerate.Fraction;
+            delay = lacerate.DueAt - (swingAt ?? AreaTime(player));
+        }
+        else delay = aftershock is not null ? 0 : spell
             ? castDuration.Value / 1000.0 * (repeat + Animations.SpellAreaRelease(SkillsFor(player).ClassFor(player.Character.ClassRow).AnimatedObject)) + repeatDelay
             : GemAttackContactDelay(player, gem.Effect, strikeSeconds ?? SupportedAttackSeconds(player, skillId, hand),
                 out contactClip, out contactFraction)
@@ -2867,7 +2879,7 @@ public static partial class Game
             delay = AttackTiming.ContactDelay(attackSeconds, contactFraction, 0) + repeatDelay;
         }
         var shieldWaves = shieldUse?.Waves;
-        int radius = shieldWaves?.CentreRadius ?? (int)Math.Round((radiusOverride ?? (divineBlast && !immediate
+        int radius = lacerate?.Waves.Radius ?? shieldWaves?.CentreRadius ?? (int)Math.Round((radiusOverride ?? (divineBlast && !immediate
             ? SkillRadius(player, Stat(global::Stat.ActiveSkillBaseSecondaryAreaOfEffectRadius), areaStats, spell: false, gem.Effect)
             : SkillRadius(player, areaStats, spell, gem.Effect))) * radiusMore * chargeRadius);
         // Ground Slam's wave: the skills whose action is the data's "DistanceScaledGroundSlam" travel forward from where
@@ -2893,6 +2905,7 @@ public static partial class Game
             : MeleeAreaCentre.Of(SkillsFor(player).ActionHash(gem.Effect), from, to, radius + MeleeSkillReach(player, weapon, gem.Effect, skillStats));
         int action = actionToken ?? cooldownUse?.ActionToken ?? player.ActionCount;
         if (divineBlast) centre = to;
+        if (lacerate is not null) centre = lacerate.Waves.Origin;
         // A later action (a Move, another use) replaces the swing; nothing of it lands from then on. The ordinary attack
         // says so at its own contact (Attack's HitTarget); this says so for a gem skill's sweep, whose drop was otherwise
         // invisible in the log (the live tests cannot count what a swing did without it).
@@ -2937,12 +2950,13 @@ public static partial class Game
             await WhilePaused(player);
             if (Replaced() || player.Closed || !Current()) return;
         }
+        if (lacerate is not null && !SameTriggerSource(lacerate.Source, SupportedSkill(player, skillId))) return;
         int addedChaos;
         int glacialFreezeMore = 0;
         bool shatteringCritical = false;
         bool shatterFrozen = !spell && Stat(global::Stat.GlacialHammerShatterFrozenEnemiesAt33PctLife) != 0;
         double contactAt = firstContactAt ?? AreaTime(player);
-        int strikes = SkillMultiStrike.StrikeCount(SkillsFor(player).EffectId(gem.Effect), Stat(global::Stat.BaseSkillNumberOfAdditionalHits),
+        int strikes = lacerate is not null ? 1 : SkillMultiStrike.StrikeCount(SkillsFor(player).EffectId(gem.Effect), Stat(global::Stat.BaseSkillNumberOfAdditionalHits),
             immediate, channelGeneration is not null, spell, wave);
         ISet<uint>? alreadyHit = priorTargets ?? SkillMultiStrike.SnapshotPriorTargets(once, strikes);
         List<(uint Id, SpawnedMonster M)> targets;
@@ -3026,13 +3040,14 @@ public static partial class Game
                 }
             }
             IEnumerable<(uint Key, SpawnedMonster Value, (int X, int Y) At, double Distance)> TargetsAt((int X, int Y) c) =>
-                (boneshatter is null ? player.Area.Monsters : player.Area.MonstersNear(c, radius))
+                (boneshatter is null && lacerate is null ? player.Area.Monsters : player.Area.MonstersNear(c, radius))
                 .Select(e => (e.Key, e.Value, At: e.Value.Walk.Position(now)))
                 .Select(e => (e.Key, e.Value, e.At, Distance: fissure
                     ? VolcanicFissureSweep.ContactDistance(from, end, e.At, radius) : Dist(e.At, c)))
                 .Where(e => e.Key != excludeMonster && e.Value.Hostile && !e.Value.Dead && e.Value.Life > 0 && e.Value.OwnerId is null
                     && (singleStrikeTarget is null || e.Key == singleStrikeTarget)
-                    && (shieldWaves is not null || e.Distance <= reachLimit)
+                    && (shieldWaves is not null || lacerate is not null || e.Distance <= reachLimit)
+                    && (lacerate is null || !e.Value.WorldHidden && lacerate.Waves.Covers(lacerate.Phase, e.At, LivingCollision.Size(e.Value)))
                     && (strikeIndex > 0 ? !SkillMultiStrike.WasHitBeforeUse(alreadyHit, e.Key) : once?.Contains(e.Key) != true)
                     && (!wave || GroundSlamWave.Covers(waveDir, from, e.At, waveHalfAngle, waveLength))
                     && (targetFilter is null || targetFilter(e.Key, e.At)));
@@ -3141,8 +3156,8 @@ public static partial class Game
         }
         // One simultaneous sweep, independent of notification latency. A holy hammer's hits are melee area hits that can
         // grant Fortification (the wiki's Holy Sweep of Hammerfalls); Rage stays with its sweep.
-        bool fortificationGranted = shieldUse?.FortificationGranted == true;
-        bool rageGranted = hammer is not null || shieldUse?.RageGranted == true; // Only a positive gain takes this sweep's latch.
+        bool fortificationGranted = shieldUse?.FortificationGranted == true || lacerate?.FortificationGranted == true;
+        bool rageGranted = hammer is not null || shieldUse?.RageGranted == true || lacerate?.RageGranted == true; // Only a positive gain takes this sweep's latch.
         // The enemies this sweep struck and where, for Holy Sweep's hammers (RunHolyHammers).
         var hammerTargets = new List<(uint Id, (int X, int Y) At)>();
         double bloodMore = BloodChargeDamageMore(player, Stat);
@@ -3733,7 +3748,9 @@ public static partial class Game
             : shieldUse is { } shieldWave
                 ? $"in shield wave {shieldWave.Phase + 1} from ({centre.X}, {centre.Y}), "
                     + $"side radius {shieldWave.Waves.SideRadius}, centre radius {shieldWave.Waves.CentreRadius}"
-                : $"within {radius} cells of ({centre.X}, {centre.Y})";
+                : lacerate is { } slash
+                    ? $"in Lacerate wave {slash.Phase + 1}, {slash.Waves.Angle} deg, {radius} cells from ({centre.X}, {centre.Y})"
+                    : $"within {radius} cells of ({centre.X}, {centre.Y})";
         string contact = holdsItsSwing
             ? $", contact {contactFraction:0.###} of the attack ({(contactClip is null ? "the attack1 fallback" : contactClip)})"
             : "";
@@ -3759,15 +3776,24 @@ public static partial class Game
                 else await SendBloodCharges(player, $"{gem.Name}: {landed} hit, {deaths.Count} killed");
             }
         }
-        bool nextWave = shieldUse?.TryAdvance() == true;
+        bool nextWave = shieldUse?.TryAdvance() == true || lacerate?.TryAdvance() == true;
         if (nextWave || shieldUse is null && strikeIndex == 0 && strikes > 1)
         {
             double next;
             if (nextWave)
             {
-                shieldUse!.FortificationGranted = fortificationGranted;
-                shieldUse.RageGranted = rageGranted;
-                next = shieldUse.DueAt;
+                if (lacerate is not null)
+                {
+                    lacerate.FortificationGranted = fortificationGranted;
+                    lacerate.RageGranted = rageGranted;
+                    next = lacerate.DueAt;
+                }
+                else
+                {
+                    shieldUse!.FortificationGranted = fortificationGranted;
+                    shieldUse.RageGranted = rageGranted;
+                    next = shieldUse.DueAt;
+                }
             }
             else
             {
@@ -3791,7 +3817,7 @@ public static partial class Game
                 singleStrikeTarget: singleStrikeTarget, onHit: onHit, scheduledSession: scheduledSession, cryExerted: cryExerted, prepaidRawExtra: prepaidRawExtra, baseChaos: baseChaos, hammer: hammer, brandedTarget: brandedTarget,
                 targetFilter: targetFilter, extraStunThresholdReduction: extraStunThresholdReduction, extraStunDurationPct: extraStunDurationPct,
                 extraKnockbackDistancePct: extraKnockbackDistancePct, removeStunAndKnockback: removeStunAndKnockback,
-                offHandWeapon: offHandWeapon, shieldUse: shieldUse, additionalStrikeTargets: additionalStrikeTargets);
+                offHandWeapon: offHandWeapon, shieldUse: shieldUse, additionalStrikeTargets: additionalStrikeTargets, lacerate: lacerate);
         }
     }
 
